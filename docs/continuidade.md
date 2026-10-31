@@ -9,6 +9,8 @@ Build ARM64 e inspeção aprovados: mesma assinatura, versão 1.1.2/code18, sem 
 
 [English](en/continuidade.md)
 
+Publicada a [release principal v1.1.2](https://github.com/richardheise/Tique/releases/tag/v1.1.2), ID `430238233`. Fonte/tag `795ca137700e9b49ae2033e3702eda269c7371d3`, 321 arquivos conferidos byte a byte; fonte SHA-256 `a0b8e48c646dacad854c0dedb2ec60ca7cf26fd60ffc7bd246c4706943340ae3`. Nove anexos conferidos por tamanho e digest remoto. API pública/latest e APK HTTP 200 sem autenticação verificados, 46.853.282 bytes. Snapshot permanente `artifacts/releases/v1.1.2/`; tags/anexos anteriores preservados.
+
 ## Entrega 1.1.1 — lugares, captura e correção
 
 Usuário priorizou os itens 1–3: anulação segura, executar testes Android e melhorar captura Nubank, com foco em compras e Pix. Acrescentou identificação do estabelecimento como tag e categoria separada (BLUMENAUENSE → Comida), com preenchimento pelo usuário no próprio app. Implementado sem Markov/IA: regras determinísticas por nome/aliases e revisão explícita; padrões por semelhança não são aplicação automática. [ADR 0015](adr/0015-correcao-captura-e-estabelecimentos.md), [notas](releases/v1.1.1.md).

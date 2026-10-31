@@ -9,6 +9,8 @@ ARM64 build and inspection passed: same signature, version 1.1.2/code18, no INTE
 
 # Continuity — Tique 1.1.1
 
+Published [latest release v1.1.2](https://github.com/richardheise/Tique/releases/tag/v1.1.2), ID `430238233`. Source/tag `795ca137700e9b49ae2033e3702eda269c7371d3`, 321 files checked byte for byte; source SHA-256 `a0b8e48c646dacad854c0dedb2ec60ca7cf26fd60ffc7bd246c4706943340ae3`. Nine assets checked against remote sizes and digests. Public/latest API and APK HTTP 200 without authentication verified, 46,853,282 bytes. Permanent snapshot: `artifacts/releases/v1.1.2/`; prior tags/assets preserved.
+
 ## Delivery 1.1.1 — places, capture, and correction
 
 The user prioritized items 1–3: safe cancellation, running Android tests, and improving Nubank capture, focusing on purchases and Pix. They added merchant identification as a tag, separate from category (BLUMENAUENSE → Food), entered by the user in the app. Implemented without Markov/AI: deterministic name/alias rules and explicit review; similarity patterns are not applied automatically. [ADR 0015](adr/0015-correcao-captura-e-estabelecimentos.md), [release notes](releases/v1.1.1.md).
