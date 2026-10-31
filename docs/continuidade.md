@@ -10,6 +10,9 @@ Executados: 46 testes TypeScript, 72 JVM e 87 Android instrumentados no emulador
 
 O rascunho 1.1.0 e seus anexos/tag são preservados sem publicação. A 1.1.1 acrescenta a tag do lugar a confirmações em lote e compras manuais, preserva a categoria escolhida e o request original. Auditoria é validada em sequência; replays de dados antigos reconstruem a intenção original pela primeira revisão, sem reescrever dinheiro. Foram acrescentados dois testes Android antes da execução final (87 aprovados). APK 1.1.1/code17, 46827124 bytes, SHA-256 `16eb9a899d64ceda8feb0a491ebd97d30ab441754f5c33e2de1e670b2cb95b7e`; mesma assinatura, inspeção e comparação dos 27 fontes de interface incorporados aprovadas. O lote mantém classificações individuais por padrão e permite edição conjunta explícita.
 
+
+Publicada a [release principal v1.1.1](https://github.com/richardheise/Tique/releases/tag/v1.1.1), ID `430224245`. Fonte/tag `9bc3affbc137121fb85d8346601c9c7ae82ed1af`, 262 arquivos conferidos byte a byte no arquivo fonte; SHA-256 `9516155646d27162f58268285e468a98680a842a1b78ff9bde195ccd66e861b1`. Nove anexos conferidos por tamanho e digest remoto. API pública/latest e download APK HTTP 200 sem autenticação verificados, 46.827.124 bytes. Snapshot permanente em `artifacts/releases/v1.1.1/`. O rascunho 1.1.0 permanece não publicado e imutável; não mover sua tag ou sobrescrever anexos. Commit documental posterior não modifica os fontes distribuídos.
+
 ## Entrega 1.0 — 31/10/2026
 
 Usuário autorizou implementar reclassificação, regras locais, transferências/caixinhas, cartão/fatura e comparação mensal, inverter as abas para abrir Análises e publicar 1.0. Escolheu Space Grotesk e pediu linguagem curta para leigos, concentrando explicações técnicas em Sobre o Tique. Esta direção substitui a abertura em Movimentos da 0.11.
