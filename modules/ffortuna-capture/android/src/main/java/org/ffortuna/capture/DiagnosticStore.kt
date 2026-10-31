@@ -96,12 +96,18 @@ class DiagnosticStore(private val context:Context,private val name:String="ffort
                 for(id in rawExpired) {
                     val parsed=db.rawQuery("SELECT sample_id FROM candidate_parses WHERE sample_id=?",arrayOf(id)).use { it.moveToFirst() }
                     if(!parsed) throw DiagnosticFailure("CANDIDATE_PROCESSING")
-                    // Generic notification descriptions can still contain the original sentence.
-                    // Remove that derived copy too; explicit user edits and imported transaction fields persist.
+                    // Derived descriptions and matched text snippets may repeat private source text.
+                    // Expire those copies with the original; explicit edits and selected values persist.
                     val mode=db.rawQuery("SELECT mode FROM samples WHERE id=?",arrayOf(id)).use { it.moveToFirst();it.getString(0) }
                     if(mode=="daily") {
                         val parsedJson=db.rawQuery("SELECT result_json FROM candidate_parses WHERE sample_id=?",arrayOf(id)).use { it.moveToFirst();JSONObject(it.getString(0)) }
                         parsedJson.getJSONObject("draft").put("description","")
+                        parsedJson.optJSONObject("fieldEvidence")?.let { fields ->
+                            fields.keys().asSequence().toList().forEach { key -> fields.optJSONObject(key)?.remove("observedText") }
+                        }
+                        parsedJson.optJSONArray("amountEvidence")?.let { evidence ->
+                            for(index in 0 until evidence.length()) evidence.optJSONObject(index)?.remove("observedText")
+                        }
                         db.execSQL("UPDATE candidate_parses SET result_json=? WHERE sample_id=?",arrayOf(parsedJson.toString(),id))
                     }
                     db.execSQL("UPDATE samples SET payload=NULL WHERE id=?",arrayOf(id))

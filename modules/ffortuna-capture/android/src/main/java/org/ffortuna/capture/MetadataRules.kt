@@ -46,9 +46,56 @@ object MetadataRules {
         db.execSQL("CREATE INDEX finance_metadata_audit_transaction ON finance_metadata_audit(transaction_scope,transaction_id,changed_at)")
     }
 
+    /** Schema 5→6: tolerate development databases that already have some new columns. */
+    fun migrateMerchantSchema(db: SQLiteDatabase) {
+        val columns = db.rawQuery("PRAGMA table_info(finance_metadata_rules)", null).use { cursor ->
+            buildSet { while (cursor.moveToNext()) add(cursor.getString(1)) }
+        }
+        if ("match_mode" !in columns) db.execSQL("ALTER TABLE finance_metadata_rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'exact'")
+        if ("aliases_json" !in columns) db.execSQL("ALTER TABLE finance_metadata_rules ADD COLUMN aliases_json TEXT NOT NULL DEFAULT '[]'")
+        if ("merchant_tag_id" !in columns) db.execSQL("ALTER TABLE finance_metadata_rules ADD COLUMN merchant_tag_id TEXT")
+    }
+
+    fun validate(db: SQLiteDatabase) {
+        db.rawQuery("SELECT id,description,match_key,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_mode,aliases_json,merchant_tag_id FROM finance_metadata_rules", null).use { rows ->
+            while (rows.moveToNext()) {
+                val id = rows.getString(0)
+                val description = rows.getString(1)
+                if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not() || matchKey(description) != rows.getString(2)) throw FinanceFailure("INVALID_STATE")
+                val mode = rows.getString(9)
+                if (mode !in setOf("exact", "merchant") || rows.getInt(6) !in setOf(0, 1)) throw FinanceFailure("INVALID_STATE")
+                val aliases = parseAliasesJson(rows.getString(10))
+                aliases.forEach { cleanLabel(cleanDescription(it)) }
+                val aliasKeys = aliases.map(::matchKey)
+                if (aliasKeys.distinct().size != aliases.size || (mode == "exact" && aliases.isNotEmpty())) throw FinanceFailure("INVALID_STATE")
+                val tagIds = parseTagsJson(rows.getString(5))
+                val maxTags = if (mode == "merchant") 19 else 20
+                if (tagIds.distinct().size != tagIds.size || tagIds.size > maxTags) throw FinanceFailure("INVALID_STATE")
+                val categoryId = rows.getString(3).takeUnless { rows.isNull(3) }
+                if (categoryId != null) ensureClassification(db, categoryId, "category")
+                for (tagId in tagIds) ensureClassification(db, tagId, "tag")
+                val merchantTagId = rows.getString(11).takeUnless { rows.isNull(11) }
+                if (mode == "merchant") {
+                    cleanLabel(description)
+                    if (aliasKeys.any { it == matchKey(description) } || merchantTagId == null || merchantTagId in tagIds) throw FinanceFailure("INVALID_STATE")
+                    ensureClassification(db, merchantTagId, "tag")
+                } else if (merchantTagId != null) throw FinanceFailure("INVALID_STATE")
+                cleanLabel(rows.getString(4))
+                Instant.parse(rows.getString(7)); Instant.parse(rows.getString(8))
+            }
+        }
+    }
+
+    private fun ensureClassification(db: SQLiteDatabase, id: String, kind: String) {
+        if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false).not()) throw FinanceFailure("INVALID_STATE")
+        db.rawQuery("SELECT id FROM classifications WHERE id=? AND kind=?", arrayOf(id, kind)).use {
+            if (!it.moveToFirst()) throw FinanceFailure("INVALID_STATE")
+        }
+    }
+
     /** Caller owns the DB transaction and backup boundary for every mutation. */
     fun listRules(db: SQLiteDatabase): List<Map<String, Any?>> = db.rawQuery(
-        "SELECT id,description,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at FROM finance_metadata_rules ORDER BY updated_at DESC,id",
+        "SELECT id,description,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_key,match_mode,aliases_json,merchant_tag_id FROM finance_metadata_rules ORDER BY updated_at DESC,id",
         null
     ).use { cursor -> buildList {
         while (cursor.moveToNext()) add(ruleMap(cursor, db))
@@ -56,26 +103,41 @@ object MetadataRules {
 
     fun saveRule(db: SQLiteDatabase, json: String): Map<String, Any?> {
         val root = parseObject(json, 8192)
-        val allowed = setOf("description", "categoryId", "category", "tagIds", "enabled")
-        if (root.keys().asSequence().toSet() !in setOf(allowed, allowed + "id")) throw FinanceFailure("INVALID_FIELDS")
+        val required = setOf("description", "categoryId", "category", "tagIds")
+        val keys = root.keys().asSequence().toSet()
+        if (!keys.containsAll(required) || !required.plus(setOf("enabled", "id", "matchMode", "aliases")).containsAll(keys)) throw FinanceFailure("INVALID_FIELDS")
         val id = if (root.has("id") && !root.isNull("id")) uuid(root.opt("id")) else UUID.randomUUID().toString()
         val description = cleanDescription(root.opt("description"))
+        val matchMode = if (root.has("matchMode")) root.optString("matchMode") else "exact"
+        if (matchMode !in setOf("exact", "merchant")) throw FinanceFailure("INVALID_FIELDS")
+        val aliases = if (root.has("aliases")) parseAliases(root.opt("aliases")) else emptyList()
+        if (matchMode == "exact" && aliases.isNotEmpty()) throw FinanceFailure("INVALID_FIELDS")
+        if (matchMode == "merchant") {
+            cleanLabel(description)
+            if (aliases.any { matchKey(it) == matchKey(description) }) throw FinanceFailure("INVALID_FIELDS")
+        }
         val categoryId = optionalString(root, "categoryId")
-        val category = cleanLabel(root.opt("category"))
+        val category = if (matchMode == "merchant" && categoryId == null && (root.isNull("category") || root.optString("category").isBlank()))
+            "A classificar" else cleanLabel(root.opt("category"))
         val tagIds = parseTags(root.opt("tagIds"))
+        if (matchMode == "merchant" && tagIds.size > 19) throw FinanceFailure("INVALID_CLASSIFICATION")
         val enabled = if (root.has("enabled")) root.opt("enabled") as? Boolean ?: throw FinanceFailure("INVALID_FIELDS") else null
         val key = matchKey(description)
         val previous = findRule(db, id)
         val now = Instant.now().toString()
-        validateMetadata(db, categoryId, category, tagIds, previous?.get("categoryId") as? String, previous?.get("tagIds") as? List<String>)
+        val oldCategoryId = previous?.get("categoryId") as? String
+        val oldTagIds = previous?.get("tagIds") as? List<String>
+        validateMetadata(db, categoryId, category, tagIds, oldCategoryId, oldTagIds)
         val duplicate = db.rawQuery("SELECT id FROM finance_metadata_rules WHERE match_key=? AND id!=? LIMIT 1", arrayOf(key, id)).use { it.moveToFirst() }
         if (duplicate) throw FinanceFailure("RULE_DUPLICATE")
         val selectedEnabled = enabled ?: (previous?.get("enabled") as? Boolean ?: true)
+        val merchantTagId = if (matchMode == "merchant") ensureMerchantTag(db, description) else null
         if (previous == null) {
-            db.execSQL("INSERT INTO finance_metadata_rules VALUES(?,?,?,?,?,?,?,?,?)", arrayOf(id, description, key, categoryId, category, JSONArray(tagIds).toString(), if (selectedEnabled) 1 else 0, now, now))
+            db.execSQL("INSERT INTO finance_metadata_rules(id,description,match_key,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_mode,aliases_json,merchant_tag_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf(id, description, key, categoryId, category, JSONArray(tagIds).toString(), if (selectedEnabled) 1 else 0, now, now, matchMode, JSONArray(aliases).toString(), merchantTagId))
         } else {
-            db.execSQL("UPDATE finance_metadata_rules SET description=?,match_key=?,category_id=?,category_legacy=?,tag_ids_json=?,enabled=?,updated_at=? WHERE id=?",
-                arrayOf(description, key, categoryId, category, JSONArray(tagIds).toString(), if (selectedEnabled) 1 else 0, now, id))
+            db.execSQL("UPDATE finance_metadata_rules SET description=?,match_key=?,category_id=?,category_legacy=?,tag_ids_json=?,enabled=?,updated_at=?,match_mode=?,aliases_json=?,merchant_tag_id=? WHERE id=?",
+                arrayOf(description, key, categoryId, category, JSONArray(tagIds).toString(), if (selectedEnabled) 1 else 0, now, matchMode, JSONArray(aliases).toString(), merchantTagId, id))
         }
         return findRule(db, id) ?: throw FinanceFailure("INVALID_STATE")
     }
@@ -89,33 +151,40 @@ object MetadataRules {
         return findRule(db, id) ?: throw FinanceFailure("INVALID_STATE")
     }
 
-    /** Exact description suggestion for an unreviewed candidate; inactive options never auto-apply. */
+    /** Deterministic exact or explicitly named merchant suggestion for an unreviewed candidate. */
     fun suggestion(db: SQLiteDatabase, description: String): Map<String, Any?>? {
         val key = try { matchKey(description) } catch (_: Exception) { return null }
-        val id = db.rawQuery("SELECT id FROM finance_metadata_rules WHERE match_key=? AND enabled=1", arrayOf(key)).use {
-            if (it.moveToFirst()) it.getString(0) else null
-        } ?: return null
-        val rule = findRule(db, id) ?: return null
-        val categoryId = rule["categoryId"] as? String ?: return null
-        val category = db.rawQuery("SELECT name,kind,archived FROM classifications WHERE id=?", arrayOf(categoryId)).use {
+        val candidates = matchingRules(db, key)
+        val rule = selectSuggestionCandidate(candidates) ?: return null
+        val merchantMatches = candidates.filter { it["matchMode"] == "merchant" }
+        val categoryId = rule["categoryId"] as? String
+        val matchMode = rule["matchMode"] as? String ?: "exact"
+        val category = if (categoryId == null) {
+            if (matchMode == "exact") return null
+            "A classificar"
+        } else db.rawQuery("SELECT name,kind,archived FROM classifications WHERE id=?", arrayOf(categoryId)).use {
             if (it.moveToFirst() && it.getString(1) == "category" && it.getInt(2) == 0) it.getString(0) else null
         } ?: return null
-        val tags = rule["tagIds"] as? List<String> ?: return null
-        for (tag in tags) {
+        val tags = (rule["tagIds"] as? List<String> ?: return null).toMutableList()
+        val merchantRule = if (matchMode == "merchant") rule else merchantMatches.singleOrNull()
+        val merchantTagId = merchantRule?.get("merchantTagId") as? String
+        if (merchantRule != null) tags += merchantTagId ?: return null
+        val distinctTags = tags.distinct().sorted()
+        for (tag in distinctTags) {
             val active = db.rawQuery("SELECT kind,archived FROM classifications WHERE id=?", arrayOf(tag)).use {
                 it.moveToFirst() && it.getString(0) == "tag" && it.getInt(1) == 0
             }
             if (!active) return null
         }
-        return mapOf("ruleId" to id, "description" to (rule["description"] as String), "categoryId" to categoryId,
-            "category" to category, "tagIds" to tags)
+        return mapOf("ruleId" to (rule["id"] as String), "matchMode" to matchMode, "description" to (rule["description"] as String),
+            "categoryId" to categoryId, "category" to category, "tagIds" to distinctTags,
+            "merchantTagId" to merchantTagId, "merchantTagName" to merchantRule?.get("merchantTagName"))
     }
 
     /** Exact normalized description match; only live, confirmed income/expense records are returned. */
     fun previewRule(db: SQLiteDatabase, id: String): List<Map<String, Any?>> {
         uuid(id)
         val rule = findRule(db, id) ?: throw FinanceFailure("RULE_MISSING")
-        val key = rule["matchKey"] as String
         val rows = mutableListOf<Map<String, Any?>>()
         val sources = listOf(
             Triple("finance", "finance_transactions", "finance_cancellations"),
@@ -127,7 +196,7 @@ object MetadataRules {
             ORDER BY t.effective_date DESC,t.created_at DESC,t.id""", null).use { cursor ->
             while (cursor.moveToNext()) {
                 val description = cursor.getString(4)
-                if (matchKey(description) != key) continue
+                if (!matches(rule, matchKey(description))) continue
                 val transactionId = cursor.getString(0)
                 val sourceType = if (cursor.isNull(8)) "manual" else try {
                     if (JSONObject(cursor.getString(8)).optString("packageName") == "org.tique.statement") "statement" else "notification"
@@ -146,13 +215,17 @@ object MetadataRules {
                 val category = if (categoryId == null) cursor.getString(6) else db.rawQuery("SELECT name FROM classifications WHERE id=?", arrayOf(categoryId)).use { categoryCursor ->
                     if (!categoryCursor.moveToFirst()) cursor.getString(6) else categoryCursor.getString(0)
                 }
+                val merchantMatches = matchingRules(db, matchKey(description)).filter { it["matchMode"] == "merchant" }
+                val merchantRule = if (merchantMatches.size == 1) merchantMatches.single() else null
                 rows += mapOf(
                     "id" to transactionId, "kind" to cursor.getString(1), "amountCents" to cursor.getLong(2),
                     "effectiveDate" to cursor.getString(3), "description" to description,
                     "categoryId" to categoryId, "category" to category,
                     "tagIds" to tags, "tags" to tagNames, "sourceEventId" to cursor.getString(7).takeUnless { cursor.isNull(7) },
                     "sourceType" to if (scope == "extended") "card" else sourceType,
-                    "scope" to scope, "voided" to false, "cancellationReason" to null
+                    "scope" to scope, "voided" to false, "cancellationReason" to null,
+                    "merchantTagId" to merchantRule?.get("merchantTagId"), "merchantTagName" to merchantRule?.get("merchantTagName"),
+                    "merchantAmbiguous" to (merchantMatches.size > 1)
                 )
             }
         }
@@ -164,7 +237,6 @@ object MetadataRules {
         if (changes.isEmpty() || changes.size > 1000 || changes.map { it.transactionId }.distinct().size != changes.size) throw FinanceFailure("INVALID_FIELDS")
         val rule = ruleId?.let { uuid(it); findRule(db, it) ?: throw FinanceFailure("RULE_MISSING") }
         if (rule != null && rule["enabled"] != true) throw FinanceFailure("RULE_DISABLED")
-        val key = rule?.get("matchKey") as? String
         val now = Instant.now().toString()
         var updated = 0
         for (change in changes) {
@@ -199,7 +271,20 @@ object MetadataRules {
             if (tags.size != change.tagIds.size || tags.size > 20) throw FinanceFailure("INVALID_CLASSIFICATION")
             validateMetadata(db, change.categoryId, category, tags, oldCategoryId, oldTags)
             if (rule != null) {
-                if (matchKey(description) != key || change.categoryId != rule["categoryId"] || category != rule["category"] || tags != rule["tagIds"]) throw FinanceFailure("RULE_MISMATCH")
+                val mode = rule["matchMode"] as? String ?: "exact"
+                if (!matches(rule, matchKey(description))) throw FinanceFailure("RULE_MISMATCH")
+                if (mode == "exact") {
+                    val placeRules = matchingRules(db, matchKey(description)).filter { it["matchMode"] == "merchant" }
+                    if (placeRules.size > 1) throw FinanceFailure("AMBIGUOUS_RULE_MATCH")
+                    val expectedTags = ((rule["tagIds"] as? List<String> ?: emptyList()) +
+                        (placeRules.singleOrNull()?.get("merchantTagId") as? String ?: "")).filter { it.isNotEmpty() }.distinct().sorted()
+                    if (change.categoryId != rule["categoryId"] || category != rule["category"] || tags != expectedTags) throw FinanceFailure("RULE_MISMATCH")
+                } else {
+                    val requiredTags = (oldTags + (rule["tagIds"] as? List<String> ?: emptyList()) +
+                        (rule["merchantTagId"] as? String ?: throw FinanceFailure("INVALID_STATE"))).distinct().sorted()
+                    val ruleCategoryId = rule["categoryId"] as? String
+                    if ((ruleCategoryId != null && (change.categoryId != ruleCategoryId || category != rule["category"])) || tags != requiredTags) throw FinanceFailure("RULE_MISMATCH")
+                }
             }
             if (change.categoryId == oldCategoryId && category == oldCategory && tags == oldTags.sorted()) continue
 
@@ -227,7 +312,7 @@ object MetadataRules {
     }
 
     private fun findRule(db: SQLiteDatabase, id: String): Map<String, Any?>? = db.rawQuery(
-        "SELECT id,description,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_key FROM finance_metadata_rules WHERE id=?", arrayOf(id)
+        "SELECT id,description,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_key,match_mode,aliases_json,merchant_tag_id FROM finance_metadata_rules WHERE id=?", arrayOf(id)
     ).use { if (it.moveToFirst()) ruleMap(it, db) else null }
 
     private fun ruleMap(cursor: android.database.Cursor, db: SQLiteDatabase): Map<String, Any?> {
@@ -241,8 +326,84 @@ object MetadataRules {
         val createdAt = cursor.getString(6)
         val updatedAt = cursor.getString(7)
         val key = if (cursor.columnCount > 8) cursor.getString(8) else matchKey(description)
+        val mode = if (cursor.columnCount > 9) cursor.getString(9) else "exact"
+        val aliases = if (cursor.columnCount > 10) parseAliasesJson(cursor.getString(10)) else emptyList()
+        val merchantTagId = if (cursor.columnCount > 11 && !cursor.isNull(11)) cursor.getString(11) else null
+        val merchantTagName = merchantTagId?.let { tagName(db, it) }
         return mapOf("id" to id, "description" to description, "categoryId" to categoryId, "category" to category,
-            "tagIds" to tags, "enabled" to enabled, "createdAt" to createdAt, "updatedAt" to updatedAt, "matchKey" to key)
+            "tagIds" to tags, "enabled" to enabled, "createdAt" to createdAt, "updatedAt" to updatedAt, "matchKey" to key,
+            "matchMode" to mode, "aliases" to aliases, "merchantTagId" to merchantTagId, "merchantTagName" to merchantTagName)
+    }
+
+    private fun ensureMerchantTag(db: SQLiteDatabase, name: String): String {
+        val normalized = cleanLabel(name)
+        val key = Normalizer.normalize(normalized.uppercase(Locale.ROOT).lowercase(Locale.ROOT), Normalizer.Form.NFC)
+        val existing = db.rawQuery("SELECT id,archived FROM classifications WHERE kind='tag' AND name_key=? LIMIT 1", arrayOf(key)).use {
+            if (it.moveToFirst()) it.getString(0) to (it.getInt(1) == 1) else null
+        }
+        if (existing != null) {
+            if (existing.second) db.execSQL("UPDATE classifications SET archived=0 WHERE id=?", arrayOf(existing.first))
+            return existing.first
+        }
+        val count = db.rawQuery("SELECT COUNT(*) FROM classifications", null).use { it.moveToFirst(); it.getInt(0) }
+        if (count >= 200) throw FinanceFailure("CLASSIFICATION_LIMIT")
+        val id = UUID.randomUUID().toString()
+        db.execSQL("INSERT INTO classifications VALUES(?,?,?,?,0)", arrayOf(id, "tag", normalized, key))
+        return id
+    }
+
+    private fun tagName(db: SQLiteDatabase, id: String): String? = db.rawQuery(
+        "SELECT name FROM classifications WHERE id=? AND kind='tag'", arrayOf(id)
+    ).use { if (it.moveToFirst()) it.getString(0) else null }
+
+    private fun matches(rule: Map<String, Any?>, key: String): Boolean =
+        when (rule["matchMode"] as? String ?: "exact") {
+            "exact" -> key == rule["matchKey"]
+            "merchant" -> (listOf(rule["description"] as? String ?: "") + (rule["aliases"] as? List<String> ?: emptyList()))
+                .any { matchesMerchantTerm(key, it) }
+            else -> false
+        }
+
+    internal fun selectSuggestionCandidate(candidates: List<Map<String, Any?>>): Map<String, Any?>? {
+        val exact = candidates.filter { it["matchMode"] == "exact" }
+        val merchants = candidates.filter { it["matchMode"] == "merchant" }
+        // An exact full-description choice is more specific than a merchant alias.
+        // Multiple merchant matches stay ambiguous and are never applied silently.
+        return when {
+            exact.size == 1 && merchants.size <= 1 -> exact.single()
+            exact.size == 1 -> null
+            exact.size > 1 -> null
+            else -> merchants.singleOrNull()
+        }
+    }
+
+    private fun matchingRules(db: SQLiteDatabase, normalizedDescription: String): List<Map<String, Any?>> =
+        db.rawQuery("SELECT id FROM finance_metadata_rules WHERE enabled=1 ORDER BY id", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) findRule(db, cursor.getString(0))?.let { rule -> if (matches(rule, normalizedDescription)) add(rule) } }
+        }
+
+    internal fun matchesMerchantTerm(description: String, term: String): Boolean {
+        val pattern = runCatching { matchKey(term) }.getOrNull() ?: return false
+        val text = runCatching { matchKey(description) }.getOrNull() ?: return false
+        return merchantContains(text, pattern)
+    }
+
+    private fun merchantContains(text: String, pattern: String): Boolean {
+        if (pattern.isBlank()) return false
+        var from = 0
+        while (from <= text.length - pattern.length) {
+            val start = text.indexOf(pattern, from)
+            if (start < 0) return false
+            val end = start + pattern.length
+            if ((start == 0 || !isWord(text[start - 1])) && (end == text.length || !isWord(text[end]))) return true
+            from = start + 1
+        }
+        return false
+    }
+
+    private fun isWord(value: Char): Boolean {
+        val type = Character.getType(value)
+        return Character.isLetterOrDigit(value) || type == Character.NON_SPACING_MARK.toInt() || type == Character.COMBINING_SPACING_MARK.toInt()
     }
 
     private fun validateMetadata(db: SQLiteDatabase, categoryId: String?, category: String, tags: List<String>, oldCategoryId: String?, oldTags: List<String>?) {
@@ -267,6 +428,28 @@ object MetadataRules {
         val values = (0 until array.length()).map { uuid(array.opt(it)) }
         if (values.distinct().size != values.size) throw FinanceFailure("INVALID_CLASSIFICATION")
         return values.sorted()
+    }
+
+    private fun parseAliases(value: Any?): List<String> {
+        val array = value as? JSONArray ?: throw FinanceFailure("INVALID_FIELDS")
+        if (array.length() > 20) throw FinanceFailure("INVALID_FIELDS")
+        val aliases = (0 until array.length()).map { index ->
+            val alias = cleanDescription(array.opt(index))
+            if (alias.length > 80) throw FinanceFailure("INVALID_RULE_DESCRIPTION")
+            alias
+        }
+        val keys = aliases.map(::matchKey)
+        if (keys.distinct().size != keys.size) throw FinanceFailure("INVALID_FIELDS")
+        return aliases
+    }
+
+    private fun parseAliasesJson(value: String): List<String> {
+        val array = try { JSONArray(value) } catch (_: Exception) { throw FinanceFailure("INVALID_STATE") }
+        if (array.length() > 20) throw FinanceFailure("INVALID_STATE")
+        return (0 until array.length()).map { index ->
+            val alias = array.getString(index)
+            cleanLabel(cleanDescription(alias))
+        }
     }
 
     private fun parseTagsJson(value: String): List<String> {

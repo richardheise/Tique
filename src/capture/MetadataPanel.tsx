@@ -10,10 +10,11 @@ type MetadataApi = {
   reclassifyFinanceTransactions(fieldsJson: string): Promise<{ status: 'ok' | 'error'; code?: string; updated?: number }>;
 };
 type Selection = { categoryId: string | null; category: string; tagIds: string[] };
+type RuleInput = { matchMode?: 'exact' | 'merchant'; description: string; aliases?: string[]; categoryId: string | null; category: string; tagIds: string[] };
 type Props = {
   native: CaptureModule; busy: boolean; run: (task: () => Promise<unknown>) => Promise<void>;
   transactions: FinanceTransaction[]; onSaved: () => void;
-  onCreateRule?: (input: { description: string; categoryId: string | null; category: string; tagIds: string[] }) => void;
+  onCreateRule?: (input: RuleInput) => void;
   initialSelectedIds?: string[];
   valuesHidden?: boolean;
 };
@@ -134,7 +135,11 @@ export function MetadataPanel({ native, busy, run, transactions, onSaved, onCrea
       <Text style={styles.label}>Tags opcionais</Text>
       <View style={styles.wrap}>{items.filter(item => item.kind === 'tag' && (!item.archived || selection.tagIds.includes(item.id))).map(item => <Chip key={item.id} title={`${item.name}${item.archived ? ' · arquivada' : ''}`} active={selection.tagIds.includes(item.id)} onPress={() => toggleTag(item.id)} />)}</View>
       <Action title={`Salvar para ${selectedIds.length || 'nenhum'} movimento${selectedIds.length === 1 ? '' : 's'}`} disabled={disabled || !selectedIds.length} onPress={apply} />
-      {oneSelected && onCreateRule && <Action secondary title="Criar regra desta correção" disabled={disabled} onPress={() => onCreateRule({ description: oneSelected.description, ...selection })} />}
+      {oneSelected && onCreateRule && <View style={{ gap: 6 }}>
+        <Action secondary title="Criar regra desta descrição" disabled={disabled} onPress={() => onCreateRule({ matchMode: 'exact', description: oneSelected.description, aliases: [], ...selection })} />
+        <Action secondary title="Criar regra deste lugar" disabled={disabled} onPress={() => onCreateRule({ matchMode: 'merchant', description: '', aliases: [], categoryId: selection.categoryId, category: selection.categoryId ? selection.category : '', tagIds: [] })} />
+        <Text style={styles.small}>No modo lugar, informe o nome e outros nomes. O Tique sempre adiciona a tag do lugar.</Text>
+      </View>}
     </>}
   </Card>;
 }

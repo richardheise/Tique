@@ -8,6 +8,7 @@ import java.time.LocalDate
 /** Uses the diagnostic owner's connection/executor. Previews are not a second financial ledger. */
 class CandidateStore(private val db:SQLiteDatabase) {
     companion object {
+        private const val PARSER_VERSION = "notification-candidate/2+${BrlNotificationParser.VERSION}+${NotificationFinanceHintParser.VERSION}"
         fun createSchema(db:SQLiteDatabase) {
             db.execSQL("""CREATE TABLE candidate_parses(sample_id TEXT PRIMARY KEY REFERENCES samples(id) ON DELETE CASCADE,
                 parser_version TEXT NOT NULL,result_json TEXT NOT NULL,parsed_at TEXT NOT NULL)""")
@@ -32,30 +33,33 @@ class CandidateStore(private val db:SQLiteDatabase) {
         if(source.summary) throw DiagnosticFailure("GROUP_SUMMARY")
         return source.payload?.let(DiagnosticFields::decode) ?: throw DiagnosticFailure("PAYLOAD_UNAVAILABLE")
     }
-    private fun draft(fields:DiagnosticFields,amount:Long?):Map<String,Any?> = mapOf("amountCents" to amount,"kind" to null,"effectiveDate" to null,
+    private fun draft(fields:DiagnosticFields,amount:Long?,hints:NotificationFinanceHints):Map<String,Any?> = mapOf("amountCents" to amount,"kind" to hints.kind,"effectiveDate" to hints.effectiveDate,
         "effectiveAt" to null,"description" to listOf(fields.text,fields.bigText,fields.title).firstOrNull { it.isNotBlank() }?.take(500).orEmpty(),
-        "category" to "A classificar","reserveId" to null,"direction" to null)
+        "category" to "A classificar","reserveId" to null,"direction" to null,"paymentMethod" to hints.paymentMethod)
     private fun parse(source:Source,now:Instant) {
         val fields=original(source)
         val texts=listOf("title" to fields.title,"text" to fields.text,"bigText" to fields.bigText,"subText" to fields.subText)+
             fields.textLines.mapIndexed { index,text -> "textLines[$index]" to text }
         val result=BrlNotificationParser.parse(texts,source.truncated)
+        val hints=NotificationFinanceHintParser.parse(texts,source.truncated)
         val evidence=result.evidence.map { mapOf("sourceField" to it.field,"start" to it.start,"end" to it.end,"observedText" to it.text,"amountCents" to it.amountCents) }
         val primary=result.evidence.firstOrNull { it.amountCents==result.amountCents && result.amountCents!=null }
-        val fieldEvidence=if(primary==null) emptyMap() else mapOf("amountCents" to mapOf("value" to result.amountCents.toString(),
-            "sourceField" to primary.field,"observedText" to primary.text,"start" to primary.start,"end" to primary.end))
-        val data=mapOf("parserVersion" to BrlNotificationParser.VERSION,"draft" to draft(fields,result.amountCents),
-            "confidence" to mapOf("movement" to "uncertain","amount" to result.amountConfidence,"nature" to "missing","account" to "missing","date" to "missing","category" to "uncertain"),
+        val fieldEvidence=linkedMapOf<String,Any>()
+        if(primary!=null) fieldEvidence["amountCents"]=mapOf("value" to result.amountCents.toString(),
+            "sourceField" to primary.field,"observedText" to primary.text,"start" to primary.start,"end" to primary.end)
+        fieldEvidence.putAll(hints.fieldEvidence)
+        val data=mapOf("parserVersion" to PARSER_VERSION,"draft" to draft(fields,result.amountCents,hints),
+            "confidence" to mapOf("movement" to "uncertain","amount" to result.amountConfidence,"nature" to hints.natureConfidence,"account" to "missing","date" to hints.dateConfidence,"category" to "uncertain","paymentMethod" to if(hints.paymentMethod==null) "missing" else "certain"),
             "fieldEvidence" to fieldEvidence,"amountEvidence" to evidence,"externalId" to null,
             "reasonCode" to result.reasonCode,"reason" to (reasons[result.reasonCode] ?: "Revisar antes de interpretar financeiramente."),"automaticPostingAllowed" to false)
         // Edits reference samples, never this replaceable parsing row. Reprocessing cannot cascade-delete corrections.
-        db.execSQL("INSERT OR REPLACE INTO candidate_parses VALUES(?,?,?,?)",arrayOf(source.id,BrlNotificationParser.VERSION,JSONObject(data).toString(),now.toString()))
+        db.execSQL("INSERT OR REPLACE INTO candidate_parses VALUES(?,?,?,?)",arrayOf(source.id,PARSER_VERSION,JSONObject(data).toString(),now.toString()))
     }
     fun processCurrentSession(now:Instant):Int {
         val pending=mutableListOf<String>()
         db.rawQuery("""SELECT s.id FROM samples s LEFT JOIN candidate_parses p ON p.sample_id=s.id
             WHERE (s.session_id=(SELECT session_id FROM session WHERE id=1) OR s.mode IN ('daily','import')) AND s.is_summary=0 AND s.payload IS NOT NULL AND s.origin_json IS NULL
-            AND (p.sample_id IS NULL OR p.parser_version!=?) ORDER BY s.rowid""",arrayOf(BrlNotificationParser.VERSION)).use {
+            AND (p.sample_id IS NULL OR p.parser_version!=?) ORDER BY s.rowid""",arrayOf(PARSER_VERSION)).use {
             while(it.moveToNext()) pending.add(it.getString(0))
         }
         for(id in pending) parse(source(id),now)
@@ -66,7 +70,7 @@ class CandidateStore(private val db:SQLiteDatabase) {
         if(source.summary) throw DiagnosticFailure("GROUP_SUMMARY")
         val original=source.payload?.let(DiagnosticFields::decode) ?: DiagnosticFields()
         val version=db.rawQuery("SELECT parser_version FROM candidate_parses WHERE sample_id=?",arrayOf(id)).use { if(it.moveToFirst()) it.getString(0) else null }
-        if(source.origin==null && (force || version!=BrlNotificationParser.VERSION) && source.payload!=null) parse(source,now)
+        if(source.origin==null && (force || version!=PARSER_VERSION) && source.payload!=null) parse(source,now)
         if(version==null && source.payload==null) throw DiagnosticFailure("PAYLOAD_UNAVAILABLE")
         if(force && source.payload==null) throw DiagnosticFailure("PAYLOAD_UNAVAILABLE")
         val parsed=db.rawQuery("SELECT result_json,parsed_at FROM candidate_parses WHERE sample_id=?",arrayOf(id)).use {
@@ -110,7 +114,13 @@ class CandidateStore(private val db:SQLiteDatabase) {
         val status=root.get("status") as? String ?: throw DiagnosticFailure("INVALID_CANDIDATE_REVIEW")
         if(description.length>500 || category.length>80 || status !in setOf("reviewed","dismissed") || (description+category).any { Character.isISOControl(it) && it!='\n' && it!='\t' })
             throw DiagnosticFailure("INVALID_CANDIDATE_REVIEW")
-        original(source(id))
+        val source = source(id)
+        if (source.summary) throw DiagnosticFailure("GROUP_SUMMARY")
+        if (source.payload != null) original(source)
+        else {
+            val hasSavedParse=db.rawQuery("SELECT sample_id FROM candidate_parses WHERE sample_id=?",arrayOf(id)).use { it.moveToFirst() }
+            if (!hasSavedParse) throw DiagnosticFailure("PAYLOAD_UNAVAILABLE")
+        }
         db.execSQL("INSERT OR REPLACE INTO candidate_edits VALUES(?,?,?)",arrayOf(id,root.toString(),now.toString()))
         return detail(id,now)
     }

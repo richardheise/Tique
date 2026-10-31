@@ -13,7 +13,7 @@ import { categoryKey, filterTransactions } from './dashboard';
 import type { BackupResult, CaptureModule, FinanceResult, FinanceSnapshot, FinanceTransaction, LocalRecoveryEntry } from './native';
 
 export type FinanceView = 'home' | 'transactions' | 'entry' | 'more' | 'balance' | 'categories' | 'resources' | 'metadata' | 'rules';
-type RulePrefill = { description: string; categoryId: string | null; category: string; tagIds: string[] };
+type RulePrefill = { matchMode?: 'exact' | 'merchant'; description: string; aliases?: string[]; categoryId: string | null; category: string; tagIds: string[] };
 type Props = { native: CaptureModule; busy: boolean; run: (task: () => Promise<unknown>) => Promise<void>; view: FinanceView; onNavigate: (view: FinanceView) => void; onTools: () => void; entryKind?: 'income' | 'expense'; entryRequest?: number; valuesHidden: boolean; onToggleValues: () => void; epoch?: number; onChanged?: () => void; selectedMonth?: string; onSelectedMonthChange?: (month: string) => void; uncategorizedOnly?: boolean; onBookChanged?: () => void; initialRule?: RulePrefill; onCreateRule?: (input: RulePrefill) => void };
 type ClassificationSelection = { categoryId: string | null; category: string; tagIds: string[] };
 type ExtendedFinanceTransaction = Omit<FinanceTransaction, 'kind'> & {
@@ -82,12 +82,16 @@ const errorMessages: Record<string, string> = {
   UNSUPPORTED_MOVEMENT: 'Esse tipo de movimento ainda não é aceito.',
   DATE_BEFORE_OPENING: 'A data precisa ser igual ou posterior à abertura do livro.',
   FUTURE_DATE: 'Datas futuras ainda não são aceitas.',
-  CONFIRMATION_CONFLICT: 'A conferência não corresponde ao estado atual do livro.',
+  CONFIRMATION_CONFLICT: 'O livro mudou desde a última tentativa. Atualize o histórico e confira o registro.',
   TRANSACTION_LIMIT: 'O limite de movimentos foi atingido.',
   ACCOUNT_CONFIRMATION_REQUIRED: 'Confirme a conta antes de continuar.',
   RECOVERY_BLOCKED: 'A recuperação local está bloqueada; confira o estado das cópias.',
   INVALID_AMOUNT: 'Informe um valor BRL válido dentro do limite seguro.',
   AMOUNT_LIMIT: 'O total ultrapassaria o limite monetário seguro.',
+  INSUFFICIENT_FUNDS: 'Não dá para anular: isso deixaria a caixinha negativa.',
+  CANCELLATION_CONFLICT: 'Não dá para anular: há pagamentos ligados a esta fatura ou dívida.',
+  CANCELLATION_DEPENDENCY: 'Não dá para anular: há movimentos que dependem deste registro.',
+  ALREADY_CANCELLED: 'Este registro já foi anulado.',
   INVALID_DATE: 'Confira a data informada.',
   INVALID_FIELDS: 'Confira os campos de texto.',
   NOT_CONFIGURED: 'Configure primeiro o saldo de abertura.',
@@ -112,7 +116,11 @@ const errorMessages: Record<string, string> = {
   CLEANUP_FAILED: 'A limpeza não terminou; as cópias restantes foram preservadas.',
   PREFERENCES_IO: 'Não foi possível salvar a configuração de recuperação.',
 };
-function failure(code?: string) { return code ? `${errorMessages[code] ?? 'Operação não concluída.'} (${code})` : 'Operação não concluída.'; }
+function failure(code?: string) {
+  if (!code) return 'Operação não concluída.';
+  const message = errorMessages[code] ?? 'Operação não concluída.';
+  return ['INSUFFICIENT_FUNDS', 'CANCELLATION_CONFLICT', 'CANCELLATION_DEPENDENCY', 'ALREADY_CANCELLED'].includes(code) ? message : `${message} (${code})`;
+}
 
 export function FinancePanel({ native, busy, run, view, onNavigate, onTools, entryKind, entryRequest, valuesHidden, onToggleValues, epoch, onChanged, selectedMonth, onSelectedMonthChange, uncategorizedOnly = false, onBookChanged, initialRule, onCreateRule }: Props) {
   const [internalMonth, setInternalMonth] = useState(currentMonthLocal);
@@ -315,7 +323,7 @@ export function FinancePanel({ native, busy, run, view, onNavigate, onTools, ent
   }
 
   function requestCancellation(item: FinanceTransaction) {
-    Alert.alert('Anular este registro?', 'Isso anula somente o registro no livro. Não cancela uma operação bancária e não é um estorno.', [
+    Alert.alert('Anular este registro?', 'O original continuará no histórico. Isso corrige apenas o livro: não cancela uma operação bancária nem faz um estorno. Para corrigir um valor, anule o registro e adicione outro.', [
       { text: 'Voltar', style: 'cancel' },
       { text: 'Informar motivo', style: 'destructive', onPress: () => {
         if (!mounted.current || !active.current) return;
@@ -447,7 +455,7 @@ export function FinancePanel({ native, busy, run, view, onNavigate, onTools, ent
         const flow = transactionFlow(extended);
         const amountPrefix = flow === 'in' ? '+ ' : flow === 'out' ? '− ' : '↔ ';
         const reclassifiable = !item.voided && (extended.kind === 'income' || extended.kind === 'expense' || extended.kind === 'card_purchase');
-        const cancellable = !item.voided && extended.scope !== 'extended' && (extended.kind === 'income' || extended.kind === 'expense');
+        const cancellable = !item.voided && ['income', 'expense', 'card_purchase', 'card_payment', 'reserve_move', 'reserve_opening', 'reserve_adjustment', 'transfer', 'commitment_opening'].includes(extended.kind);
         return <View key={`${extended.scope ?? 'finance'}:${item.id}`} style={{ borderTopWidth: 1, borderColor: colors.line, paddingTop: 14, gap: 7 }}>
         {index === 0 || transactions[index-1]?.effectiveDate !== item.effectiveDate ? <Text style={styles.small}>{localDateLabel(item.effectiveDate)}</Text> : null}
         <Pressable accessibilityRole="button" accessibilityLabel={`Detalhes de ${item.description}`} onPress={() => setDetailsId(value => value === item.id ? null : item.id)} style={{ minHeight: 48, justifyContent: 'center', gap: 6 }}>
@@ -460,6 +468,10 @@ export function FinancePanel({ native, busy, run, view, onNavigate, onTools, ent
           {item.voided ? <Text style={styles.small}>Anulado · {item.cancellationReason}</Text> : <>
             {reclassifiable && <Action title="Reclassificar" secondary disabled={blocked} onPress={() => { setMetadataSelectedIds([item.id]); onNavigate('metadata'); }} />}
             {cancellable && <Action title="Anular registro" secondary disabled={blocked} onPress={() => requestCancellation(item)} />}
+            {item.voided && <Action title="Registrar correção" secondary disabled={blocked} onPress={() => {
+              if (extended.kind === 'income' || extended.kind === 'expense') { editKind(extended.kind); onNavigate('entry'); }
+              else onNavigate('resources');
+            }} />}
           </>}
         </View>}
         {cancellationId === item.id && <View style={{ gap: 8 }}>

@@ -6,6 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -100,13 +101,15 @@ class FinancialResourcesTest {
                     .put("effectiveDate", "2020-01-02").put("description", "Compra histórica fictícia")
                     .put("category", "Compras").put("categoryId", JSONObject.NULL).put("tagIds", JSONArray())
                 ledger.post(historical.toString())
-                assertEquals(-250L, ledger.snapshot("2020-01")["balanceCents"])
+                val historic = ledger.snapshot("2020-01")
+                assertEquals(250L, historic["expenseCents"])
+                assertEquals(750L, historic["balanceCents"])
                 assertEquals(750L, ledger.snapshot(openingDate.take(7))["balanceCents"])
             }
         }
     }
 
-    @Test fun cardPurchaseAndPaymentSurviveV3BackupAndMetadataReclassification() {
+    @Test fun cardPurchaseAndPaymentSurviveBackupAndMetadataReclassification() {
         SecuritySandbox(InstrumentationRegistry.getInstrumentation().targetContext).use { sandbox ->
             val date = LocalDate.now().toString()
             val month = date.take(7)
@@ -185,7 +188,7 @@ class FinancialResourcesTest {
                 catalog.setArchived(categoryId, true)
                 assertEquals(null, ledger.suggestMetadata("Compra teste mercado"))
                 backup = catalog.exportFinance()
-                assertEquals(3, JSONObject(backup.toString(Charsets.UTF_8)).getInt("version"))
+                assertEquals(FinancialBackup.CURRENT_VERSION, JSONObject(backup.toString(Charsets.UTF_8)).getInt("version"))
             }
             try {
                 ClassificationCatalog(sandbox.context, sandbox.newName(), true).use { restored ->
@@ -220,6 +223,155 @@ class FinancialResourcesTest {
                         assertTrue(oldSnapshot["configured"] == true)
                     }
                 } finally { legacy.fill(0) }
+            } finally { backup.fill(0) }
+        }
+    }
+
+    @Test fun extendedCancellationIsIdempotentKeepsEvidenceAndProtectsReserveAndInvoiceBalances() {
+        SecuritySandbox(InstrumentationRegistry.getInstrumentation().targetContext).use { sandbox ->
+            val book = sandbox.newName()
+            val date = LocalDate.now().toString()
+            val month = date.take(7)
+            var backup = ByteArray(0)
+            var purchaseId = ""
+            var eventId = ""
+            ClassificationCatalog(sandbox.context, book, true).use { catalog ->
+                val ledger = catalog.ledger() // Resource workflows start with an internal zero opening.
+                fun cancel(id: String, reason: String = "Correção fictícia") = ledger.cancel(JSONObject().put("id", id).put("reason", reason).toString())
+                fun failure(id: String, reason: String, code: String) {
+                    val error = assertThrows(FinanceFailure::class.java) { cancel(id, reason) }
+                    assertEquals(code, error.code)
+                }
+
+                val reserveId = ledger.createReserve(json(uuid(), JSONObject().put("name", "Reserva cancelamento")
+                    .put("modality", "goal").put("date", date).put("amountCents", 1_000)))
+                val withdrawal = ledger.moveReserve(json(uuid(), JSONObject().put("reserveId", reserveId).put("direction", "withdraw")
+                    .put("amountCents", 700).put("date", date)))
+                val reserveOpening = ledger.rows("finance_extended_transactions").single { it["kind"] == "reserve_opening" }["id"] as String
+                failure(reserveOpening, "Não anular ainda", "INSUFFICIENT_FUNDS")
+                cancel(withdrawal)
+                assertEquals(1_000L, (ledger.snapshot(month)["reserves"] as List<Map<String, Any?>>).single()["balanceCents"])
+                cancel(reserveOpening)
+                assertEquals(0L, (ledger.snapshot(month)["reserves"] as List<Map<String, Any?>>).single()["balanceCents"])
+                assertEquals(1, ledger.rows("finance_reserves").size) // Cancellation never deletes the resource.
+                cancel(reserveOpening)
+                failure(reserveOpening, "Outro motivo", "CONFIRMATION_CONFLICT")
+
+                val sourceReserve = ledger.createReserve(json(uuid(), JSONObject().put("name", "Origem transferência")
+                    .put("modality", "goal").put("date", date).put("amountCents", 0)))
+                val targetReserve = ledger.createReserve(json(uuid(), JSONObject().put("name", "Destino transferência")
+                    .put("modality", "goal").put("date", date).put("amountCents", 0)))
+                val deposit = ledger.moveReserve(json(uuid(), JSONObject().put("reserveId", sourceReserve).put("direction", "deposit")
+                    .put("amountCents", 500).put("date", date)))
+                val adjustment = ledger.updateReserve(json(uuid(), JSONObject().put("reserveId", sourceReserve).put("amountCents", 800)
+                    .put("date", date).put("note", "Ajuste fictício")))
+                cancel(adjustment, "Ajuste removido")
+                assertEquals(500L, (ledger.snapshot(month)["reserves"] as List<Map<String, Any?>>).single { it["id"] == sourceReserve }["balanceCents"])
+                val transfer = ledger.transferReserve(json(uuid(), JSONObject().put("fromReserveId", sourceReserve).put("toReserveId", targetReserve)
+                    .put("amountCents", 200).put("date", date)))
+                cancel(transfer, "Transferência removida")
+                val reservePositions = ledger.snapshot(month)["reserves"] as List<Map<String, Any?>>
+                assertEquals(500L, reservePositions.single { it["id"] == sourceReserve }["balanceCents"])
+                assertEquals(0L, reservePositions.single { it["id"] == targetReserve }["balanceCents"])
+                cancel(deposit, "Aporte removido")
+                assertEquals(0L, (ledger.snapshot(month)["reserves"] as List<Map<String, Any?>>).single { it["id"] == sourceReserve }["balanceCents"])
+
+                val cardId = ledger.createCard(json(uuid(), JSONObject().put("name", "Cartão cancelamento")
+                    .put("closingDay", 20).put("dueDay", 5)))
+                val purchase = JSONObject().put("cardId", cardId).put("amountCents", 1_000).put("effectiveDate", date)
+                    .put("description", "Compra para cancelamento").put("category", "Compras").put("categoryId", JSONObject.NULL)
+                    .put("tagIds", JSONArray()).put("notes", "")
+                purchaseId = ledger.cardPurchase(json(uuid(), JSONObject(purchase.toString())))
+                eventId = uuid()
+                val captured = java.time.Instant.now().toString()
+                ledger.linkObservation(eventId, purchaseId, mapOf("eventId" to eventId,"packageName" to DiagnosticPolicy.PACKAGE,
+                    "sourceKey" to "invented-cancellation-evidence","revision" to 1,"publishedAt" to captured,"capturedAt" to captured,
+                    "parserVersion" to BrlNotificationParser.VERSION,"fieldEvidence" to emptyMap<String, Any?>(),"confidence" to mapOf(
+                        "movement" to "certain","amount" to "certain","nature" to "certain","account" to "missing","date" to "certain","category" to "missing")))
+                val commitment = (ledger.snapshot(month)["commitments"] as List<Map<String, Any?>>).single()
+                val payment = ledger.payCommitment(json(uuid(), JSONObject().put("commitmentId", commitment["id"])
+                    .put("amountCents", 250).put("date", date)))
+                failure(purchaseId, "Compra paga", "CANCELLATION_CONFLICT")
+                cancel(payment, "Pagamento anulado") // Invoice debt reopens without counting another expense.
+                assertEquals(1_000L, (ledger.snapshot(month)["commitments"] as List<Map<String, Any?>>).single()["remainingCents"])
+                cancel(purchaseId, "Compra anulada")
+                assertEquals(0L, ledger.snapshot(month)["expenseCents"])
+                assertTrue((ledger.snapshot(month)["commitments"] as List<*>).isEmpty())
+                assertEquals(purchaseId, ledger.transactionForEvent(eventId)?.get("id"))
+                assertEquals(1, ledger.rows("finance_extended_observation_links").size)
+                assertEquals(true, (ledger.snapshot(month)["transactions"] as List<Map<String, Any?>>).single { it["id"] == purchaseId }["voided"])
+                cancel(purchaseId, "Compra anulada")
+                failure(purchaseId, "Motivo divergente", "CONFIRMATION_CONFLICT")
+
+                val debtId = ledger.createCommitment(json(uuid(), JSONObject().put("description", "Dívida fictícia")
+                    .put("dueDate", LocalDate.parse(date).plusDays(2).toString()).put("amountCents", 900).put("cardId", JSONObject.NULL)))
+                val debtPayment = ledger.payCommitment(json(uuid(), JSONObject().put("commitmentId", debtId).put("amountCents", 300).put("date", date)))
+                val openingDebt = ledger.rows("finance_extended_transactions").single { it["kind"] == "commitment_opening" }["id"] as String
+                failure(openingDebt, "Dívida parcialmente paga", "CANCELLATION_CONFLICT")
+                cancel(debtPayment, "Pagamento de dívida anulado")
+                cancel(openingDebt, "Dívida removida")
+                assertEquals(0L, ledger.rows("finance_commitments").single { it["id"] == debtId }["amount"])
+                assertEquals(0L, ledger.snapshot(month)["debtCents"])
+                backup = catalog.exportFinance()
+            }
+            try {
+                ClassificationCatalog(sandbox.context, sandbox.newName(), true).use { restored ->
+                    restored.importFinance(backup)
+                    val ledger = restored.ledger()
+                    assertEquals(purchaseId, ledger.transactionForEvent(eventId)?.get("id"))
+                    assertEquals(0L, ledger.snapshot(month)["expenseCents"])
+                    assertEquals(1, ledger.rows("finance_extended_observation_links").size)
+                    assertTrue(ledger.rows("finance_extended_cancellations").size >= 6)
+                }
+            } finally { backup.fill(0) }
+        }
+    }
+
+    @Test fun notificationEvidenceWithNatureDateAndPixFieldsValidatesAndSurvivesBackup() {
+        SecuritySandbox(InstrumentationRegistry.getInstrumentation().targetContext).use { sandbox ->
+            val eventId = uuid()
+            val date = LocalDate.now().toString()
+            val dateText = "Data da compra: $date"
+            val captured = java.time.Instant.now().toString()
+            val source = mapOf(
+                "eventId" to eventId, "packageName" to DiagnosticPolicy.PACKAGE,
+                "sourceKey" to "invented-new-evidence-shape", "revision" to 1,
+                "publishedAt" to captured, "capturedAt" to captured,
+                "parserVersion" to "notification-candidate/2+invented",
+                "fieldEvidence" to mapOf(
+                    "amountCents" to mapOf("value" to "1234", "sourceField" to "text", "observedText" to "R$ 12,34", "start" to 0, "end" to 8),
+                    "kind" to mapOf("value" to "expense", "sourceField" to "text", "observedText" to "Compra aprovada", "start" to 0, "end" to 15),
+                    "effectiveDate" to mapOf("value" to date, "sourceField" to "text", "observedText" to dateText, "start" to 0, "end" to dateText.length),
+                    "paymentMethod" to mapOf("value" to "pix", "sourceField" to "text", "observedText" to "Pix", "start" to 0, "end" to 3)
+                ),
+                "confidence" to mapOf("movement" to "uncertain", "amount" to "certain", "nature" to "uncertain",
+                    "account" to "missing", "date" to "certain", "category" to "uncertain", "paymentMethod" to "certain")
+            )
+            var backup = ByteArray(0)
+            var transactionId = ""
+            ClassificationCatalog(sandbox.context, sandbox.newName(), true).use { catalog ->
+                val ledger = catalog.ledger()
+                val result = ledger.confirmObservedBatch(listOf(ObservedBatchPost(eventId, 1234, "expense", date,
+                    "Compra fictícia", "A classificar", null, emptyList(), source)))
+                assertEquals(listOf(date.take(7)), result["months"])
+                transactionId = ledger.transactionForEvent(eventId)?.get("id") as String
+                ledger.linkObservation(eventId, transactionId, source)
+                ledger.validate()
+                backup = catalog.exportFinance()
+            }
+            try {
+                ClassificationCatalog(sandbox.context, sandbox.newName(), true).use { restored ->
+                    restored.importFinance(backup)
+                    val ledger = restored.ledger()
+                    ledger.validate()
+                    ledger.linkObservation(eventId, transactionId, source)
+                    assertEquals(transactionId, ledger.transactionForEvent(eventId)?.get("id"))
+                    val savedTransaction = ledger.rows("finance_transactions").single { it["id"] == transactionId }
+                    assertEquals(eventId, savedTransaction["source_event_id"])
+                    val savedSource = JSONObject(savedTransaction["source_json"] as String)
+                    assertEquals("certain", savedSource.getJSONObject("confidence").getString("paymentMethod"))
+                    assertEquals(date, savedSource.getJSONObject("fieldEvidence").getJSONObject("effectiveDate").getString("value"))
+                }
             } finally { backup.fill(0) }
         }
     }

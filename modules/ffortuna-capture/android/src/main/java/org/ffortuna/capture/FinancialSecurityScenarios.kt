@@ -201,7 +201,9 @@ class FinancialSecurityScenarios(private val context: Context) {
                     expect(restoredLedger.snapshot(month())["balanceCents"] == 1000L, "FINANCE_BACKUP_CANCELLED_BALANCE")
                     finance.switchPrevious()
                     expect(finance.activeName() == activeBefore, "FINANCE_PREVIOUS_NOT_SWITCHED")
-                    expect(finance.current().ledger().snapshot(month())["balanceCents"] == 750L, "FINANCE_PREVIOUS_DATA_LOST")
+                    // The previous active book contains the opening balance minus the 50-cent
+                    // expense posted after export; the 200-cent expense was canceled before export.
+                    expect(finance.current().ledger().snapshot(month())["balanceCents"] == 950L, "FINANCE_PREVIOUS_DATA_LOST")
                 } finally { restoredPlain.fill(0); password.fill('\u0000') }
             }
         },

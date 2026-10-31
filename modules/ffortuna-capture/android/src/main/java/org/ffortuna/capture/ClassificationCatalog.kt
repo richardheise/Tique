@@ -17,7 +17,7 @@ class ClassificationCatalog(
 ) : AutoCloseable {
     companion object {
         const val DEFAULT_NAME = "ffortuna-classifications-v1"
-        private const val VERSION = 4
+        private const val VERSION = 6
         private val seedCategories = listOf("Comida", "Lazer", "Contas", "Transporte", "Saúde", "Educação", "Compras", "Outros")
 
         private fun createSchema(db: SQLiteDatabase) {
@@ -71,6 +71,10 @@ class ClassificationCatalog(
                 if(db.version==1) { FinancialLedger.createSchema(db);db.version=2 }
                 if(db.version==2) { FinancialLedger.createLinksSchema(db);db.version=3 }
                 if(db.version==3) { FinancialLedger.createResourcesSchema(db);MetadataRules.createSchema(db);db.version=4 }
+                // Version 5 formalizes extended-movement cancellation semantics; schema is unchanged.
+                if(db.version==4) { db.version=5 }
+                // Version 6 adds explicit merchant rules; older rows remain exact rules.
+                if(db.version==5) { MetadataRules.migrateMerchantSchema(db);db.version=6 }
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
             verify()
@@ -104,6 +108,7 @@ class ClassificationCatalog(
             val label=row["name"] as String
             if(normalizeName(label)!=label || nameKey(label)!=row["name_key"]) throw FinanceFailure("INVALID_STATE")
         }
+        MetadataRules.validate(db)
     }
 
     fun create(kind: String, name: String): List<Map<String, Any?>> {

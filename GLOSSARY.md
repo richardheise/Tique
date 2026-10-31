@@ -4,6 +4,19 @@ Vocabulário do aplicativo para distinguir fatos observados, decisões do usuár
 
 ## Linguagem
 
+**Estabelecimento (lugar)**:
+Nome pelo qual o usuário identifica onde comprou ou com quem movimentou dinheiro. Pode ter nomes alternativos explícitos. Quando uma regra identifica um único lugar, sua tag acompanha a classificação; a categoria principal continua separada.
+_Evitar_: categoria e estabelecimento como a mesma informação
+
+**Pista de notificação**:
+Trecho que ajuda a preencher um campo, acompanhado de sua origem e confiança. Não é confirmação bancária. Pix identifica meio de pagamento; publicação de notificação não é data efetiva comprovada.
+_Evitar_: transação automaticamente comprovada
+
+**Anulação de registro**:
+Retirada do efeito de um registro nos cálculos do app, mantendo original e motivo. Pode ser bloqueada por dependências. Não estorna dinheiro nem executa uma operação bancária.
+_Evitar_: apagar histórico, desfazer pagamento no banco
+
+
 **Confirmação em lote**:
 Decisão explícita de registrar um conjunto selecionado de candidatos com natureza e classificação indicadas pelo usuário. O núcleo aplica as validações e a proveniência de cada item e grava o conjunto atomicamente. O sinal de um extrato não substitui a confirmação de natureza.
 _Evitar_: confirmar tudo automaticamente, importar pelo sinal

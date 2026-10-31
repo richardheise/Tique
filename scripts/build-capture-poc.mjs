@@ -5,11 +5,12 @@ import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const deviceTests = process.argv.includes('--run-device-tests');
 // Enforce a bound on the ENTIRE build process tree, not only the Java heap.
 if (process.env.FFORTUNA_BUILD_IN_SCOPE !== '1') {
   const limited = spawnSync('systemd-run', ['--user','--scope','--quiet',
-    '--unit=ffortuna-native-build','--property=MemoryHigh=10G','--property=MemoryMax=12G',
-    '--property=MemorySwapMax=0','--property=CPUQuota=1600%','--property=TasksMax=512',
+    '--unit=ffortuna-native-build',`--property=MemoryHigh=${deviceTests ? '7G' : '10G'}`,`--property=MemoryMax=${deviceTests ? '8G' : '12G'}`,
+    '--property=MemorySwapMax=0',`--property=CPUQuota=${deviceTests ? '1200%' : '1600%'}`,'--property=TasksMax=512',
     '/usr/bin/env','FFORTUNA_BUILD_IN_SCOPE=1',process.execPath,fileURLToPath(import.meta.url),...process.argv.slice(2)],
     {cwd:root,env:process.env,stdio:'inherit'});
   if(limited.error) throw new Error('Limite de recursos indisponível; build não será iniciado.', {cause:limited.error});
@@ -62,12 +63,12 @@ if(!existsSync(join(root,'android/settings.gradle')) || !existsSync(stamp) || re
   writeFileSync(stamp,fingerprint);
 } else console.log('Projeto Android gerado preservado; configuração inalterada.');
 writeFileSync(join(root,'android/local.properties'), `sdk.dir=${sdk}\n`);
-const testOnly = process.argv.includes('--test-only');
+const testOnly = process.argv.includes('--test-only') || deviceTests;
 const configureOnly = process.argv.includes('--configure-only');
 const options = ['--no-daemon','--console=plain','--max-workers=1','--no-parallel','-Dorg.gradle.parallel=false',
   '-Dorg.gradle.jvmargs=-Xmx3072m -XX:MaxMetaspaceSize=512m -XX:ActiveProcessorCount=16',
   '-Pkotlin.compiler.execution.strategy=in-process','-Dorg.gradle.priority=low',
-  '-PreactNativeArchitectures=arm64-v8a'];
+  `-PreactNativeArchitectures=${deviceTests ? 'x86_64' : 'arm64-v8a'}`];
 function gradle(tasks) { run('./gradlew', [...tasks,...options], join(root,'android')); }
 if (!testOnly || configureOnly) {
   gradle([':app:configureCMakeRelWithDebInfo[arm64-v8a]']);
@@ -78,7 +79,7 @@ if (!testOnly || configureOnly) {
     throw new Error('Serialização do Ninja do app não confirmada; compilação bloqueada.');
   console.log('Ninja do app: pool de compilação limitado confirmado.');
 }
-if (!configureOnly) gradle([':ffortuna-capture:testReleaseUnitTest', ...(testOnly ? [] : [':app:assembleRelease']), ...(process.argv.includes('--compile-device-tests') ? [':ffortuna-capture:compileReleaseAndroidTestKotlin'] : [])]);
+if (!configureOnly) gradle([':ffortuna-capture:testReleaseUnitTest', ...(testOnly ? [] : [':app:assembleRelease']), ...(deviceTests ? [':ffortuna-capture:connectedReleaseAndroidTest'] : []), ...(process.argv.includes('--compile-device-tests') ? [':ffortuna-capture:compileReleaseAndroidTestKotlin'] : [])]);
 if (!testOnly && !configureOnly) {
   const destination = join(root,'artifacts');
   mkdirSync(destination,{recursive:true});

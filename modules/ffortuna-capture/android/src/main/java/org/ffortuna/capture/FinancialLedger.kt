@@ -185,7 +185,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         val transactionCount=db.rawQuery("SELECT COUNT(*) FROM finance_transactions",null).use { it.moveToFirst();it.getInt(0) }
         if(transactionCount>=10_000) throw FinanceFailure("TRANSACTION_LIMIT")
         val id=UUID.randomUUID().toString();val sourceJson=source?.let { JSONObject(it).toString() }
-        if(sourceJson!=null && sourceJson.length>4096) throw FinanceFailure("INVALID_SOURCE")
+        if(sourceJson!=null && sourceJson.length>8192) throw FinanceFailure("INVALID_SOURCE")
         db.execSQL("INSERT INTO finance_transactions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",arrayOf<Any?>(id,key,request,kind,amount,date,description,categoryId,category,Instant.now().toString(),if(manual) null else command,sourceJson))
         entries(id,if(kind=="income") amount else -amount,kind)
         for(tag in ids) db.execSQL("INSERT INTO finance_tags VALUES(?,?)",arrayOf(id,tag))
@@ -360,15 +360,74 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         if(rows("finance_balance_checks").size>=1000) throw FinanceFailure("TRANSACTION_LIMIT")
         db.execSQL("INSERT INTO finance_balance_checks VALUES(?,?,?,?)",arrayOf<Any>(UUID.randomUUID().toString(),date,amount,Instant.now().toString()))
     }
-    /** Voids legacy income/expense records. Resource/card corrections need compensating ledger entries; those are not exposed yet. */
+    /** Voids a ledger event while preserving its row, source evidence and linked candidate identity. */
     fun cancel(json:String)=atomic {
         val value=root(json,setOf("id","reason"));val id=string(value,"id");val reason=FinanceRules.text(string(value,"reason").trim(),500)
         if(reason.isEmpty()) throw FinanceFailure("INVALID_FIELDS")
-        val transaction=rows("finance_transactions").firstOrNull { it["id"]==id } ?: if(rows("finance_extended_transactions").any { it["id"]==id }) throw FinanceFailure("UNSUPPORTED_MOVEMENT") else throw FinanceFailure("NOT_FOUND")
-        if(transaction["kind"]=="opening") throw FinanceFailure("INVALID_FIELDS")
-        val existing=rows("finance_cancellations").firstOrNull { it["transaction_id"]==id }
-        if(existing!=null) { if(existing["reason"]!=reason) throw FinanceFailure("CONFIRMATION_CONFLICT");return@atomic }
-        db.execSQL("INSERT INTO finance_cancellations VALUES(?,?,?)",arrayOf(id,reason,Instant.now().toString()))
+        val transaction=rows("finance_transactions").firstOrNull { it["id"]==id }
+        if(transaction!=null) {
+            if(transaction["kind"]=="opening") throw FinanceFailure("INVALID_FIELDS")
+            val existing=rows("finance_cancellations").firstOrNull { it["transaction_id"]==id }
+            if(existing!=null) { if(existing["reason"]!=reason) throw FinanceFailure("CONFIRMATION_CONFLICT");return@atomic }
+            db.execSQL("INSERT INTO finance_cancellations VALUES(?,?,?)",arrayOf(id,reason,Instant.now().toString()))
+        } else {
+            val extended=rows("finance_extended_transactions").firstOrNull { it["id"]==id } ?: throw FinanceFailure("NOT_FOUND")
+            val existing=rows("finance_extended_cancellations").firstOrNull { it["transaction_id"]==id }
+            if(existing!=null) { if(existing["reason"]!=reason) throw FinanceFailure("CONFIRMATION_CONFLICT");return@atomic }
+            cancelExtended(extended,reason)
+        }
+    }
+    private fun cancelExtended(transaction:Map<String,Any?>,reason:String) {
+        val id=transaction["id"] as String;val kind=transaction["kind"] as String;val commitmentId=transaction["commitment_id"] as? String
+        val commitments=rows("finance_commitments");val extended=rows("finance_extended_transactions");val cancelled=rows("finance_extended_cancellations").map { it["transaction_id"] }.toSet()
+        val payments=extended.filter { it["kind"]=="card_payment"&&it["commitment_id"]==commitmentId&&it["id"] !in cancelled }.map { it["amount"] as Long }
+        when(kind) {
+            "reserve_opening","reserve_move","reserve_adjustment","transfer" -> Unit
+            "card_purchase" -> {
+                val commitment=commitments.firstOrNull { it["id"]==commitmentId } ?: throw FinanceFailure("INVALID_STATE")
+                val remaining=FinanceRules.sum(extended.filter { it["kind"]=="card_purchase"&&it["commitment_id"]==commitmentId&&it["id"]!=id&&it["id"] !in cancelled }.map { it["amount"] as Long })
+                if(FinanceRules.sum(payments)>remaining) throw FinanceFailure("CANCELLATION_CONFLICT")
+                db.execSQL("UPDATE finance_commitments SET amount=? WHERE id=?",arrayOf(remaining,commitmentId))
+            }
+            "commitment_opening" -> {
+                if(commitmentId==null||FinanceRules.sum(payments)>0L) throw FinanceFailure("CANCELLATION_CONFLICT")
+                db.execSQL("UPDATE finance_commitments SET amount=0 WHERE id=?",arrayOf(commitmentId))
+            }
+            "card_payment" -> Unit // Removing the payment from derived totals reopens the commitment.
+            else -> throw FinanceFailure("INVALID_STATE")
+        }
+        if(kind=="reserve_opening") db.execSQL("UPDATE finance_reserves SET opening_cents=0 WHERE id=?",arrayOf(transaction["resource_id"]))
+        db.execSQL("INSERT INTO finance_extended_cancellations VALUES(?,?,?)",arrayOf(id,reason,Instant.now().toString()))
+        if(kind in setOf("reserve_opening","reserve_move","reserve_adjustment","transfer")) {
+            val request=JSONObject(transaction["request_json"] as String)
+            val impacted=when(kind) {
+                "transfer" -> listOf(request.optString("fromReserveId"),request.optString("toReserveId"))
+                else -> listOf(transaction["resource_id"] as? String ?: "")
+            }.toSet()
+            if(!reserveTimelinesValid()) throw FinanceFailure("INSUFFICIENT_FUNDS")
+            for(reserve in rows("finance_reserves").filter { it["id"] in impacted }) refreshReserveDate(reserve["id"] as String)
+        }
+    }
+    private fun reserveTimelinesValid():Boolean {
+        val cancelled=rows("finance_extended_cancellations").map { it["transaction_id"] }.toSet()
+        val entries=rows("finance_extended_entries").groupBy { it["transaction_id"] }
+        val ordered=rows("finance_extended_transactions").filter { it["id"] !in cancelled }
+            .sortedWith(compareBy<Map<String,Any?>> { it["effective_date"] as String }.thenBy { Instant.parse(it["created_at"] as String) }.thenBy { it["id"] as String })
+        val balances=rows("finance_reserves").associate { (it["id"] as String) to 0L }.toMutableMap()
+        for(transaction in ordered) for(entry in entries[transaction["id"]].orEmpty()) {
+            val resource=entry["resource"] as String
+            if(resource.startsWith("reserve:")) {
+                val id=resource.removePrefix("reserve:");val balance=FinanceRules.sum(listOf(balances[id] ?: return false,entry["cents"] as Long));if(balance<0) return false;balances[id]=balance
+            }
+        }
+        return true
+    }
+    private fun refreshReserveDate(id:String) {
+        val reserve=rows("finance_reserves").firstOrNull { it["id"]==id } ?: return
+        val cancelled=rows("finance_extended_cancellations").map { it["transaction_id"] }.toSet()
+        val ids=rows("finance_extended_entries").filter { it["resource"]=="reserve:$id" }.map { it["transaction_id"] }.toSet()
+        val latest=rows("finance_extended_transactions").filter { it["id"] in ids&&it["id"] !in cancelled }.maxOfOrNull { it["effective_date"] as String } ?: reserve["created_on"] as String
+        db.execSQL("UPDATE finance_reserves SET updated_on=? WHERE id=?",arrayOf(latest,id))
     }
     /** Fixed table names only; read integers as Long, preserving exact cents across JSON. */
     fun rows(table:String):List<Map<String,Any?>> {
@@ -417,7 +476,8 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         val byCategory=expenseRows.groupBy { if(it["category_id"]==null) "label:${it["category_legacy"]}" else "id:${it["category_id"]}" }.values.map { group ->
                 mapOf("categoryId" to group.first()["category_id"],"name" to category(group.first()),"amountCents" to FinanceRules.sum(group.map(::amount)))
             }
-        val reserveRows=rows("finance_reserves");val reserveSums=extEntries.filter { (it["resource"] as String).startsWith("reserve:") }.groupBy { (it["resource"] as String).removePrefix("reserve:") }.mapValues { (_,legs)->FinanceRules.sum(legs.map { it["cents"] as Long }) }
+        val activeExtendedIds=activeExtended.map { it["id"] }.toSet()
+        val reserveRows=rows("finance_reserves");val reserveSums=extEntries.filter { (it["resource"] as String).startsWith("reserve:")&&it["transaction_id"] in activeExtendedIds }.groupBy { (it["resource"] as String).removePrefix("reserve:") }.mapValues { (_,legs)->FinanceRules.sum(legs.map { it["cents"] as Long }) }
         val reserves=reserveRows.map { reserve->mapOf("id" to reserve["id"],"name" to reserve["name"],"modality" to reserve["modality"],"balanceCents" to (reserveSums[reserve["id"]] ?: 0L),"updatedOn" to reserve["updated_on"]) }
         val commitmentRows=rows("finance_commitments");val cardRows=rows("finance_cards");val cardNames=cardRows.associate { it["id"] to it["name"] };val paidSums=activeExtended.filter { it["kind"]=="card_payment" }.groupBy { it["commitment_id"] }.mapValues { (_,payments)->FinanceRules.sum(payments.map { it["amount"] as Long }) }
         val commitments=commitmentRows.mapNotNull { item->val paid=paidSums[item["id"]] ?: 0L;val remaining=(item["amount"] as Long)-paid;if(remaining<=0) null else mapOf("id" to item["id"],"description" to item["description"],"dueDate" to item["due_date"],"amountCents" to item["amount"],"paidCents" to paid,"remainingCents" to remaining,"cardId" to item["card_id"],"cardName" to cardNames[item["card_id"]],"invoiceMonth" to item["invoice_month"]) }
@@ -503,7 +563,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         for(reserve in reserves) {
             uuidCheck(reserve["id"]);uuidCheck(reserve["command_id"]);resourceText(reserve["name"] as String,80);resourceText(reserve["modality"] as String,40)
             val opening=FinanceRules.cents(reserve["opening_cents"],true);if(opening<0) throw FinanceFailure("INVALID_STATE");val created=FinanceRules.date(reserve["created_on"] as String);FinanceRules.date(reserve["updated_on"] as String)
-            val entriesForReserve=extended.filter { it["kind"]=="reserve_opening"&&it["resource_id"]==reserve["id"] }
+            val entriesForReserve=extended.filter { it["kind"]=="reserve_opening"&&it["resource_id"]==reserve["id"]&&it["id"] !in extVoided }
             if((opening==0L&&entriesForReserve.isNotEmpty())||(opening>0L&&(entriesForReserve.size!=1||entriesForReserve.single()["amount"]!=opening||entriesForReserve.single()["effective_date"]!=created))) throw FinanceFailure("INVALID_STATE")
         }
         for(card in cards) { uuidCheck(card["id"]);uuidCheck(card["command_id"]);FinanceRules.text(card["name"] as String,80);if((card["closing_day"] as Long) !in 1..28||(card["due_day"] as Long) !in 1..28) throw FinanceFailure("INVALID_STATE") }
@@ -513,9 +573,11 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             uuidCheck(item["id"]);if(item["command_id"] !is String||item["command_id"].toString().length>128) throw FinanceFailure("INVALID_STATE")
             if(item["card_id"]!=null && item["card_id"] !in cardIds) throw FinanceFailure("INVALID_STATE")
             FinanceRules.text(item["description"] as String,500);val due=FinanceRules.date(item["due_date"] as String);val invoice=item["invoice_month"] as? String;if(invoice!=null&&FinanceRules.month(invoice)!=invoice) throw FinanceFailure("INVALID_STATE")
-            val amount=FinanceRules.cents(item["amount"]);if(invoice!=null&&item["card_id"]==null) throw FinanceFailure("INVALID_STATE")
+            val amount=FinanceRules.cents(item["amount"],signed=true);if(amount<0||(invoice!=null&&item["card_id"]==null)) throw FinanceFailure("INVALID_STATE")
             val posted=purchaseTotals[item["id"]] ?: 0L
             if(invoice!=null&&posted!=amount) throw FinanceFailure("INVALID_STATE")
+            val openingTotal=FinanceRules.sum(extended.filter { it["kind"]=="commitment_opening"&&it["commitment_id"]==item["id"]&&it["id"] !in extVoided }.map { it["amount"] as Long })
+            if(invoice==null&&openingTotal!=amount) throw FinanceFailure("INVALID_STATE")
             val paid=paymentTotals[item["id"]] ?: 0L;if(paid>amount) throw FinanceFailure("INVALID_STATE")
             if(due.isBlank()) throw FinanceFailure("INVALID_STATE")
         }
@@ -530,7 +592,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             val tagsFor=extTagGroups[id].orEmpty().map { it["tag_id"] }.toSet();if(extTagGroups[id].orEmpty().size>20||tagsFor.any { options[it]?.get("kind")!="tag" }) throw FinanceFailure("INVALID_STATE")
             val requestTags=request.optJSONArray("tagIds")?.let { a->(0 until a.length()).map { a.getString(it) }.toSet() } ?: throw FinanceFailure("INVALID_STATE");if(requestTags!=tagsFor) throw FinanceFailure("INVALID_STATE")
             when(kind) {
-                "reserve_opening" -> { val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date!=reserve["created_on"]||reserve["opening_cents"]!=amount||legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=amount||legs.singleOrNull { it["resource"]=="equity" }?.get("cents")!=-amount) throw FinanceFailure("INVALID_STATE") }
+                "reserve_opening" -> { val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date!=reserve["created_on"]||(if(id in extVoided) reserve["opening_cents"]!=0L else reserve["opening_cents"]!=amount)||legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=amount||legs.singleOrNull { it["resource"]=="equity" }?.get("cents")!=-amount) throw FinanceFailure("INVALID_STATE") }
                 "reserve_move" -> { val direction=row["direction"];val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date<(reserve["created_on"] as String)||direction !in setOf("deposit","withdraw")) throw FinanceFailure("INVALID_STATE");val signed=if(direction=="deposit") amount else -amount;if(legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=signed||legs.singleOrNull { it["resource"]=="cash" }?.get("cents")!=-signed) throw FinanceFailure("INVALID_STATE") }
                 "reserve_adjustment" -> { val direction=row["direction"];val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date<(reserve["created_on"] as String)||direction !in setOf("increase","decrease")) throw FinanceFailure("INVALID_STATE");val delta=if(direction=="increase") amount else -amount;if(legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=delta||legs.singleOrNull { it["resource"]=="equity" }?.get("cents")!=-delta) throw FinanceFailure("INVALID_STATE") }
                 "transfer" -> { val from=request.optString("fromReserveId");val to=request.optString("toReserveId");val source=reserves.firstOrNull { it["id"]==from };val target=reserves.firstOrNull { it["id"]==to };if(row["direction"]!="reserve_transfer"||from==to||from!=row["resource_id"]||source==null||target==null||date<(source["created_on"] as String)||date<(target["created_on"] as String)||legs.singleOrNull { it["resource"]=="reserve:$from" }?.get("cents")!=-amount||legs.singleOrNull { it["resource"]=="reserve:$to" }?.get("cents")!=amount) throw FinanceFailure("INVALID_STATE") }
@@ -539,17 +601,20 @@ class FinancialLedger(private val db:SQLiteDatabase) {
                 "card_payment" -> { if(row["commitment_id"] !in commitmentIds||legs.singleOrNull { it["resource"]=="cash" }?.get("cents")!=-amount||legs.singleOrNull { it["resource"]=="liability:${row["commitment_id"]}" }?.get("cents")!=amount) throw FinanceFailure("INVALID_STATE") }
             }
         }
-        val extDate=extended.filter { it["id"] !in extVoided }.associate { it["id"] to (it["effective_date"] as String) }
-        for(reserveId in reserveIds) {
-            var balance=0L
-            val dated=extEntries.filter { it["resource"]=="reserve:$reserveId"&&it["transaction_id"] in extDate }
-                .groupBy { extDate[it["transaction_id"]] as String }.toSortedMap()
-            for(day in dated.values) { balance=FinanceRules.sum(listOf(balance)+day.map { it["cents"] as Long });if(balance<0) throw FinanceFailure("INVALID_STATE") }
+        val activeExtEntries=extEntries.groupBy { it["transaction_id"] }
+        val orderedReserveTransactions=extended.filter { it["id"] !in extVoided }
+            .sortedWith(compareBy<Map<String,Any?>> { it["effective_date"] as String }.thenBy { Instant.parse(it["created_at"] as String) }.thenBy { it["id"] as String })
+        val reserveBalances=reserveIds.associateWith { 0L }.toMutableMap()
+        for(transaction in orderedReserveTransactions) for(entry in activeExtEntries[transaction["id"]].orEmpty()) {
+            val resource=entry["resource"] as String
+            if(resource.startsWith("reserve:")) {
+                val id=resource.removePrefix("reserve:");val balance=FinanceRules.sum(listOf(reserveBalances[id] ?: throw FinanceFailure("INVALID_STATE"),entry["cents"] as Long));if(balance<0) throw FinanceFailure("INVALID_STATE");reserveBalances[id]=balance
+            }
         }
         if(extEntries.any { it["transaction_id"] !in extIds }||extTags.any { it["transaction_id"] !in extIds }) throw FinanceFailure("INVALID_STATE")
-        for(id in extVoided) { val row=extById[id] ?: throw FinanceFailure("INVALID_STATE");FinanceRules.text(extCancellations.single { it["transaction_id"]==id }["reason"] as String,500);if(row["kind"] in setOf("commitment_opening","card_purchase")) throw FinanceFailure("INVALID_STATE") }
+        for(id in extVoided) { extById[id] ?: throw FinanceFailure("INVALID_STATE");val reason=FinanceRules.text(extCancellations.single { it["transaction_id"]==id }["reason"] as String,500);if(reason.isBlank()) throw FinanceFailure("INVALID_STATE");Instant.parse(extCancellations.single { it["transaction_id"]==id }["cancelled_at"] as String) }
         val legacyLinkEvents=rows("finance_observation_links").map { it["event_id"] }.toSet()
-        for(link in extLinks) { val event=link["event_id"] as String;uuidCheck(event);if(link["transaction_id"] !in extIds||link["transaction_id"] in extVoided||event in legacyLinkEvents) throw FinanceFailure("INVALID_STATE");val source=JSONObject(link["source_json"] as String);validateSource(source);if(source.getString("eventId")!=event) throw FinanceFailure("INVALID_SOURCE") }
+        for(link in extLinks) { val event=link["event_id"] as String;uuidCheck(event);if(link["transaction_id"] !in extIds||event in legacyLinkEvents) throw FinanceFailure("INVALID_STATE");val source=JSONObject(link["source_json"] as String);validateSource(source);if(source.getString("eventId")!=event) throw FinanceFailure("INVALID_SOURCE") }
         val allEvents=transactions.mapNotNull { it["source_event_id"] }+legacyLinkEvents+extended.mapNotNull { it["source_event_id"] }+extLinks.map { it["event_id"] }
         if(allEvents.distinct().size!=allEvents.size) throw FinanceFailure("INVALID_STATE")
         val rules=rows("finance_metadata_rules");val audits=rows("finance_metadata_audit");val ruleIds=rules.map { it["id"] as String }.toSet()
@@ -577,26 +642,44 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             }
             Instant.parse(audit["changed_at"] as String)
         }
+        MetadataRules.validate(db)
         for(group in extended.filter { it["id"] !in extVoided }.groupBy { (it["effective_date"] as String).take(7)+it["kind"] }.values) FinanceRules.sum(group.map { it["amount"] as Long })
         FinanceRules.sum(reserves.map { reserveBalance(it["id"] as String) });FinanceRules.sum(cards.map { card->FinanceRules.sum(commitments.filter { it["card_id"]==card["id"] }.map { it["amount"] as Long }) })
     }
     private fun uuidCheck(value:Any?) { val text=value as? String ?: throw FinanceFailure("INVALID_STATE");if(runCatching { UUID.fromString(text).toString()==text }.getOrDefault(false)!=true) throw FinanceFailure("INVALID_STATE") }
     private fun validateSource(source:JSONObject) {
-        val keys=setOf("eventId","packageName","sourceKey","revision","publishedAt","capturedAt","parserVersion","fieldEvidence","confidence")
-        if(source.keys().asSequence().toSet()!=keys || source.getString("packageName") !in setOf(DiagnosticPolicy.PACKAGE,"org.tique.statement") || source.toString().length>4096) throw FinanceFailure("INVALID_SOURCE")
+        val required=setOf("eventId","packageName","sourceKey","revision","publishedAt","capturedAt","parserVersion","fieldEvidence","confidence")
+        if(source.keys().asSequence().toSet()!=required || source.getString("packageName") !in setOf(DiagnosticPolicy.PACKAGE,"org.tique.statement") || source.toString().length>8192) throw FinanceFailure("INVALID_SOURCE")
         val id=source.getString("eventId");if(UUID.fromString(id).toString()!=id) throw FinanceFailure("INVALID_SOURCE")
         val revision=source.get("revision");if((revision !is Int && revision !is Long) || (revision as Number).toLong()<1) throw FinanceFailure("INVALID_SOURCE")
         FinanceRules.text(source.getString("sourceKey"),1024);FinanceRules.text(source.getString("parserVersion"),80)
         Instant.parse(source.getString("publishedAt"));Instant.parse(source.getString("capturedAt"))
         val confidence=source.getJSONObject("confidence")
-        if(confidence.keys().asSequence().toSet()!=setOf("movement","amount","nature","account","date","category") || confidence.keys().asSequence().any { confidence.get(it) !in setOf("certain","uncertain","missing") }) throw FinanceFailure("INVALID_SOURCE")
+        val confidenceKeys=confidence.keys().asSequence().toSet()
+        val requiredConfidence=setOf("movement","amount","nature","account","date","category")
+        if(confidenceKeys !in setOf(requiredConfidence,requiredConfidence+"paymentMethod") || confidenceKeys.any { confidence.get(it) !in setOf("certain","uncertain","missing") }) throw FinanceFailure("INVALID_SOURCE")
+        if(confidence.has("paymentMethod") && confidence.getString("paymentMethod") !in setOf("certain","missing")) throw FinanceFailure("INVALID_SOURCE")
         val evidence=source.getJSONObject("fieldEvidence")
-        if(evidence.keys().asSequence().any { it!="amountCents" }) throw FinanceFailure("INVALID_SOURCE")
-        if(evidence.has("amountCents")) {
-            val item=evidence.getJSONObject("amountCents")
+        val evidenceKeys=evidence.keys().asSequence().toSet()
+        if(evidenceKeys.any { it !in setOf("amountCents","kind","effectiveDate","paymentMethod") }) throw FinanceFailure("INVALID_SOURCE")
+        for(key in evidenceKeys) {
+            val item=evidence.getJSONObject(key)
             if(item.keys().asSequence().toSet()!=setOf("value","sourceField","observedText","start","end")) throw FinanceFailure("INVALID_SOURCE")
-            FinanceRules.text(item.getString("value"),32);FinanceRules.text(item.getString("sourceField"),64);FinanceRules.text(item.getString("observedText"),256)
-            if(item.get("start") !is Int || item.get("end") !is Int || item.getInt("start")<0 || item.getInt("end")<=item.getInt("start")) throw FinanceFailure("INVALID_SOURCE")
+            val value=item.getString("value")
+            FinanceRules.text(value,32);FinanceRules.text(item.getString("sourceField"),64);FinanceRules.text(item.getString("observedText"),1024)
+            val field=item.get("sourceField") as String
+            val standardField=field in setOf("title","text","bigText","subText") || field.matches(Regex("textLines\\[[0-9]{1,3}\\]"))
+            if(!standardField && !(source.getString("packageName")=="org.tique.statement" && key=="amountCents" && field=="statement.amount")) throw FinanceFailure("INVALID_SOURCE")
+            val start=item.get("start");val end=item.get("end")
+            if((start !is Int && start !is Long) || (end !is Int && end !is Long) || (start as Number).toLong()<0 || (end as Number).toLong()<=(start as Number).toLong() || (end as Number).toLong()>100_000) throw FinanceFailure("INVALID_SOURCE")
+            when(key) {
+                "amountCents" -> if(value.toLongOrNull()?.let { it in 1..FinanceRules.MAX } != true) throw FinanceFailure("INVALID_SOURCE")
+                "kind" -> if(value !in setOf("income","expense","transfer","other")) throw FinanceFailure("INVALID_SOURCE")
+                "effectiveDate" -> if(value!="invalid" && runCatching { FinanceRules.date(value) }.isFailure) throw FinanceFailure("INVALID_SOURCE")
+                "paymentMethod" -> if(value!="pix") throw FinanceFailure("INVALID_SOURCE")
+            }
         }
+        if((evidenceKeys.any { it!="amountCents" } && !confidence.has("paymentMethod")) ||
+            (confidence.has("paymentMethod") && ((confidence.getString("paymentMethod")=="certain") != evidence.has("paymentMethod")))) throw FinanceFailure("INVALID_SOURCE")
     }
 }

@@ -133,7 +133,7 @@ export interface FinanceSnapshot {
 export interface FinanceReserve { id: string; name: string; modality: string; balanceCents: number; updatedOn: string }
 export interface FinanceCard { id: string; name: string; closingDay: number; dueDay: number; debtCents: number }
 export interface FinanceCommitment { id: string; description: string; dueDate: string; amountCents: number; paidCents: number; remainingCents: number; cardId: string | null; cardName: string | null; invoiceMonth: string | null }
-export interface FinanceRule { id: string; description: string; categoryId: string | null; category: string; tagIds: string[]; enabled: boolean; createdAt: string; updatedAt: string }
+export interface FinanceRule { id: string; matchMode: 'exact' | 'merchant'; description: string; aliases: string[]; categoryId: string | null; category: string; tagIds: string[]; merchantTagId: string | null; merchantTagName: string | null; enabled: boolean; createdAt: string; updatedAt: string }
 export interface FinanceRuleListResult { status: 'ok' | 'error'; code?: string; rules?: FinanceRule[] }
 export interface FinanceRuleMutationResult { status: 'ok' | 'error'; code?: string; rule?: FinanceRule }
 export interface FinanceRulePreviewResult { status: 'ok' | 'error'; code?: string; matches?: FinanceTransaction[] }
@@ -185,6 +185,7 @@ export interface NotificationCandidateFields {
   amountCents: number | null; kind: 'income' | 'expense' | 'transfer' | 'other' | null;
   effectiveDate: string | null; description: string; category: string;
   categoryId?: string | null; tagIds?: string[];
+  paymentMethod?: 'pix' | null;
 }
 export interface ClassificationItem { id: string; kind: 'category' | 'tag'; name: string; archived: boolean }
 export interface ClassificationResult { status: 'ok' | 'error'; code?: string; items?: ClassificationItem[] }
@@ -193,7 +194,7 @@ export interface NotificationCandidate {
   id: string; eventId: string; revision: number; publishedAt: string; capturedAt: string; parsedAt: string;
   parsed: {
     parserVersion: string; draft: NotificationCandidateFields;
-    confidence: Record<'movement' | 'amount' | 'nature' | 'account' | 'date' | 'category', 'certain' | 'uncertain' | 'missing'>;
+    confidence: Record<'movement' | 'amount' | 'nature' | 'account' | 'date' | 'category', 'certain' | 'uncertain' | 'missing'> & { paymentMethod?: 'certain' | 'uncertain' | 'missing' };
     fieldEvidence: Record<string, { value: string; sourceField: string; observedText: string; start: number; end: number }>;
     amountEvidence: Array<{ sourceField: string; start: number; end: number; observedText: string; amountCents: number | null }>;
     reasonCode: string; reason: string; automaticPostingAllowed: false;

@@ -1,4 +1,15 @@
-# Continuidade — Tique 1.0
+# Continuidade — Tique 1.1
+
+## Entrega 1.1 — lugares, captura e correção
+
+Usuário priorizou os itens 1–3: anulação segura, executar testes Android e melhorar captura Nubank, com foco em compras e Pix. Acrescentou identificação do estabelecimento como tag e categoria separada (BLUMENAUENSE → Comida), com preenchimento pelo usuário no próprio app. Implementado sem Markov/IA: regras determinísticas por nome/aliases e revisão explícita; padrões por semelhança não são aplicação automática. [ADR 0015](adr/0015-correcao-captura-e-estabelecimentos.md), [notas](releases/v1.1.0.md).
+
+Anulação estendida preserva evidências, motivo e história, recalcula caixa/caixinhas/faturas/dívidas e bloqueia inconsistências sem gravação parcial. Esquema 6 e backup v5 leem versões anteriores. Sugestões de natureza/data têm origem e confiança; Pix é meio, data de publicação não vira data efetiva. Candidatos revistos não são sobrescritos, nem ocorre novo lançamento automático. Não há template Nubank certificado por dados reais.
+
+Executados: 45 testes TypeScript, 72 JVM e 85 Android instrumentados no emulador API36/x86_64 com KVM, zero falhas/erros/ignorados na execução final. Primeira execução teve cinco falhas: expectativas antigas de codec/saldo e falha real do decoder (direction não anulável); também corrigido o validador financeiro para aceitar novas evidências de tipo/data/Pix. XML final `.local/v11-android-final.xml`, logs `.local/v11-android-tests-final.log`. Emulador encerrado antes do build ARM64; teste limitado a 4+8 GiB/4+12 CPUs. Não houve testes no Samsung nem amostras reais Nubank, sem pedir nova bateria ao usuário.
+
+APK 1.1.0/code16, 46826596 bytes, SHA-256 `c5df29ebd1cab9c0ab4f8a8b9c5a1492ce2ff2f35db70b50a7014be2efb4b33b`. Inspeção, fonte do bundle (27 arquivos), assinatura anterior, avisos, ausência de INTERNET/backup Android e alinhamento 16 KiB aprovados. Fonte e publicação serão registrados após conferência dos anexos.
+
 
 ## Entrega 1.0 — 31/10/2026
 

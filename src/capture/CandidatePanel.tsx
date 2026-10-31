@@ -51,6 +51,7 @@ const codeMessages: Record<string, string> = {
   AMOUNT_LIMIT: 'A operação ultrapassaria um limite monetário seguro.',
   TRANSACTION_LIMIT: 'O livro atingiu o limite desta entrega. Exporte um backup e mantenha os dados.',
   INVALID_SOURCE: 'A origem deste movimento não pôde ser conferida.',
+  RULE_DUPLICATE: 'Já existe uma regra para este lugar. Nenhuma regra duplicada foi criada; a revisão continua disponível e nada foi lançado.',
 };
 const safeError = (code?: string) => codeMessages[code ?? ''] ?? 'Não foi possível concluir a operação.';
 
@@ -72,6 +73,11 @@ function matchKindLabel(kind: string) {
   if (kind === 'reserve_move') return 'Movimento da caixinha';
   if (kind === 'transfer') return 'Transferência';
   return 'Outro movimento';
+}
+function confidenceLabel(value: 'certain' | 'uncertain' | 'missing') {
+  if (value === 'certain') return 'sinal claro';
+  if (value === 'uncertain') return 'sinal incerto';
+  return 'sem sinal claro';
 }
 
 function toEditor(fields: NotificationCandidateFields): Editor {
@@ -103,6 +109,7 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [placeName, setPlaceName] = useState('');
   const [affectsAccount, setAffectsAccount] = useState(false);
   const [originOpen, setOriginOpen] = useState(false);
   const generation = useRef(0);
@@ -127,6 +134,7 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
       setMessage(null);
       setAffectsAccount(false);
       setOriginOpen(false);
+      setPlaceName('');
       setLoading(false);setSaving(false);
     }
   }, []);
@@ -233,6 +241,63 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
     }).finally(() => { payloadJson = ''; });
   }
 
+  function rememberPlace() {
+    if (!candidate || !editor || candidate.transactionId || !placeName.trim() || busy || saving || loading) return;
+    const name = placeName.trim();
+    if (name.length > 80) { setError('Use até 80 caracteres para o nome do lugar.'); return; }
+    const ruleJson = JSON.stringify({ matchMode: 'merchant', description: name, aliases: [], categoryId: editor.categoryId, category: editor.categoryId ? editor.category : 'A classificar', tagIds: [] });
+    const candidateId = candidate.id;
+    const request = generation.current;
+    let ruleSaved = false;
+    let rulePayload = ruleJson;
+    let reviewPayload = '';
+    setSaving(true); setError(null); setMessage(null);
+    void runRef.current(async () => {
+      try {
+        const ruleResult = await nativeRef.current.saveFinanceRule(rulePayload);
+        if (!mounted.current || !active.current || generation.current !== request) return;
+        if (ruleResult.status !== 'ok' || !ruleResult.rule) {
+          setError(safeError(ruleResult.code));
+          return;
+        }
+        ruleSaved = true;
+        const savedRule = ruleResult.rule;
+        const tagIds = [...new Set([...editor.tagIds, ...savedRule.tagIds, ...(savedRule.merchantTagId ? [savedRule.merchantTagId] : [])])];
+        const categoryId = savedRule.categoryId ?? editor.categoryId;
+        const category = savedRule.categoryId ? savedRule.category : editor.category;
+        const updatedEditor = { ...editor, categoryId, category, tagIds };
+        setEditor(updatedEditor);
+        setPlaceName('');
+
+        const fields = currentFields;
+        const validFields = !!fields && fields.amountCents !== null && fields.amountCents > 0 && !!fields.kind && !!fields.effectiveDate && validDate(fields.effectiveDate) && !!fields.description.trim() && fields.description.length <= 500 && category.length <= 80 && tagIds.length <= 20;
+        if (!validFields || !fields) {
+          setMessage(tagIds.length > 20 ? 'Lugar lembrado. Reduza tags antes de salvar a revisão.' : 'Lugar lembrado. Complete valor, tipo e data e salve a revisão. Nenhum lançamento foi criado.');
+          return;
+        }
+        reviewPayload = JSON.stringify({ amountCents: fields.amountCents, kind: fields.kind, effectiveDate: fields.effectiveDate, description: fields.description, category, categoryId, tagIds, status: 'reviewed' });
+        const reviewResult: DiagnosticResult = await nativeRef.current.saveDiagnosticCandidate(candidateId, reviewPayload);
+        if (!mounted.current || !active.current || generation.current !== request) return;
+        if (reviewResult.status === 'error') {
+          setError('Lugar lembrado, mas a revisão não foi salva. Confira os campos e tente novamente.');
+          return;
+        }
+        if (reviewResult.candidate) applyCandidate(reviewResult.candidate);
+        setMessage('Lugar lembrado. A revisão continua pendente; nenhum lançamento foi criado.');
+      } catch {
+        if (mounted.current && active.current && generation.current === request) {
+          setError(ruleSaved ? 'Lugar lembrado, mas a revisão não foi salva. Confira os campos e tente novamente.' : 'Não foi possível salvar a regra do lugar.');
+        }
+      }
+    }).catch(() => {
+      if (!mounted.current || !active.current || generation.current !== request) return;
+      setError(ruleSaved ? 'Lugar lembrado, mas a revisão não foi salva. Confira os campos e tente novamente.' : 'Não foi possível salvar a regra do lugar.');
+    }).finally(() => {
+      rulePayload = ''; reviewPayload = '';
+      if (mounted.current && active.current && generation.current === request) setSaving(false);
+    });
+  }
+
   function confirmFinancial() {
     if(!candidate || !currentFields || candidate.transactionId) return;
     if(!currentFields.effectiveDate || !validDate(currentFields.effectiveDate) || currentFields.amountCents === null || currentFields.amountCents <= 0 || !['income','expense'].includes(currentFields.kind ?? '')) {
@@ -300,6 +365,7 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
     {loading && <Text style={styles.small}>Carregando revisão…</Text>}
     {candidate && <>
       <Text style={styles.small}>{originLabel}</Text>
+      {candidate.ruleExplanation && <Text style={styles.small}>Sugestão da regra “{candidate.ruleExplanation.description}”: {candidate.ruleExplanation.text}</Text>}
       {candidate.temporary && <Text style={styles.warning}>Esta prévia vence em 7 dias.</Text>}
       {candidate.previousSampleId && <Text style={styles.warning}>{candidate.origin === 'statement' ? 'Este item aparece em outra versão do extrato. Confira antes de continuar.' : 'Pode ser uma atualização ou outro movimento. Confira separadamente.'}</Text>}
       {candidate.relatedReviewExists && <Text style={styles.small}>Há outra revisão relacionada; ela não foi alterada.</Text>}
@@ -323,6 +389,11 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
       {editor && <ClassificationPanel native={native} busy={busy || saving || !!candidate.transactionId} run={run} selection={{ categoryId: editor.categoryId, category: editor.category, tagIds: editor.tagIds }} onChange={selection => {
         setEditor(current => current ? { ...current, ...selection } : current);setAffectsAccount(false);setError(null);setMessage(null);
       }} />}
+      {!candidate.transactionId && <View style={{ gap: 6 }}>
+        <Field label="Qual é o lugar?" value={placeName} onChangeText={value => { setPlaceName(value); setError(null); setMessage(null); }} editable={!busy && !saving && !loading} maxLength={80} autoCorrect={false} autoComplete="off" importantForAutofill="no" />
+        <Text style={styles.small}>Nas próximas, sugerir esta categoria e marcar este lugar. Nenhum movimento será criado.</Text>
+        <Action title="Lembrar este lugar" secondary disabled={busy || saving || loading || !placeName.trim()} onPress={rememberPlace} />
+      </View>}
       {!candidate.transactionId && <>
         {!!currentFields?.kind && !['income','expense'].includes(currentFields.kind) && <Text style={styles.small}>Este tipo precisa de tratamento próprio. Mantenha a pendência salva para revisar depois.</Text>}
         <Action title="Confirmar" disabled={busy || saving || loading || !currentFields || !currentFields.effectiveDate || !['income','expense'].includes(currentFields.kind ?? '')} onPress={confirmFinancial} />
@@ -339,6 +410,12 @@ export function CandidatePanel({ native, busy, run, sampleId, onClose, onConfirm
       <View style={{ gap: 6 }}>
         <Action title={originOpen ? 'Ocultar origem' : 'Ver origem'} secondary onPress={() => setOriginOpen(value => !value)} />
         {originOpen && (originalAvailable && candidate.original ? <View style={{ gap: 5 }}>
+          <Text style={styles.label}>Pistas usadas na sugestão</Text>
+          <Text style={styles.small}>Tipo: {candidate.parsed.draft.kind ? matchKindLabel(candidate.parsed.draft.kind) : 'não definido'} · {confidenceLabel(candidate.parsed.confidence.nature)}</Text>
+          {candidate.parsed.fieldEvidence.kind?.observedText && <Text style={styles.small}>Trecho do tipo: “{candidate.parsed.fieldEvidence.kind.observedText}”</Text>}
+          <Text style={styles.small}>Data: {candidate.parsed.draft.effectiveDate ? displayDate(candidate.parsed.draft.effectiveDate) : 'não definida'} · {confidenceLabel(candidate.parsed.confidence.date)}</Text>
+          {candidate.parsed.fieldEvidence.effectiveDate?.observedText && <Text style={styles.small}>Trecho da data: “{candidate.parsed.fieldEvidence.effectiveDate.observedText}”</Text>}
+          {candidate.parsed.draft.paymentMethod === 'pix' && <><Text style={styles.small}>Meio: Pix · {confidenceLabel(candidate.parsed.confidence.paymentMethod ?? 'missing')}</Text>{candidate.parsed.fieldEvidence.paymentMethod?.observedText && <Text style={styles.small}>Trecho do meio: “{candidate.parsed.fieldEvidence.paymentMethod.observedText}”</Text>}</>}
           <Text style={styles.label}>{originLabel} original</Text>
           <Text style={styles.body}>{candidate.original.title || '—'}</Text>
           <Text style={styles.body}>{candidate.original.text || '—'}</Text>

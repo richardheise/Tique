@@ -114,7 +114,7 @@ class DailyUseTest {
         }
     }
 
-    @Test fun internalOpeningAllowsHistoricalEqualExpensesAndLinkedObservationSurvivesBackupV3() {
+    @Test fun internalOpeningAllowsHistoricalEqualExpensesAndLinkedObservationSurvivesBackup() {
         SecuritySandbox(InstrumentationRegistry.getInstrumentation().targetContext).use { sandbox ->
             val sourceName = sandbox.newName()
             val eventId = UUID.randomUUID().toString()
@@ -150,7 +150,7 @@ class DailyUseTest {
                 assertEquals(firstId, ledger.transactionForEvent(eventId)?.get("id"))
                 assertEquals(1, ledger.rows("finance_observation_links").size)
                 backup = catalog.exportFinance()
-                assertEquals(3, JSONObject(backup.toString(Charsets.UTF_8)).get("version"))
+                assertEquals(FinancialBackup.CURRENT_VERSION, JSONObject(backup.toString(Charsets.UTF_8)).get("version"))
             }
 
             try {
