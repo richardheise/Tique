@@ -1,5 +1,7 @@
 # Prompt para o Sol — uso diário, importação e análises
 
+[English](en/prompt-sol-uso-diario.md)
+
 Preparado em 31/10/2026. Este documento é uma instrução para a próxima implementação, não um registro de funcionalidades entregues.
 
 ---

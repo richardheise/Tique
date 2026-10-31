@@ -1,5 +1,7 @@
 # Prova de captura nativa — Android
 
+[English](en/captura-nativa.md)
+
 A prova sintética e seus roteiros históricos estão abaixo. A partir da 0.5.0, o mesmo APK inclui [diagnóstico real temporário opcional](diagnostico-local.md), com consentimento separado, caixa cifrada própria e sem parser/lançamentos. As restrições de dados fictícios continuam valendo para os exemplos e o livro Expo Go.
 
 Esta entrega acrescenta um APK de prova exclusivamente sintético. A demonstração financeira continua no Expo Go. O APK usa `org.ffortuna.capturepoc`, com tela de diagnóstico própria; não cria outro livro financeiro nem aceita notificações bancárias ou arquivos pessoais.

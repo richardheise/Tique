@@ -1,0 +1,56 @@
+name: Erro / Bug report
+description: Relate um problema em português ou inglês / Report a problem in Portuguese or English.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Português e English são bem-vindos. Use exemplos inventados; nunca envie notificações reais, extratos, backups, bancos ou segredos.
+        Portuguese and English are welcome. Use invented examples; never upload real notifications, statements, backups, databases, or secrets.
+  - type: checkboxes
+    id: before
+    attributes:
+      label: "1. Antes de enviar / Before submitting"
+      description: "Marque apenas o que fez. Atualização é opcional se ela falhou. / Check only what you did. Updating is optional if it failed."
+      options:
+        - label: "Li o README e as notas da minha versão. / I read the README and my release notes."
+          required: true
+        - label: "Pesquisei problemas semelhantes nas issues. / I searched existing issues for similar problems."
+          required: true
+        - label: "Consegui atualizar para a versão mais recente. / I successfully updated to the latest release."
+          required: false
+        - label: "Marquei as opções sem ler. / I checked the boxes without reading."
+          required: false
+  - type: input
+    id: version
+    attributes:
+      label: "2. Versão do Tique / Tique version"
+      placeholder: "1.1.2 — APK release ou Expo Go / release APK or Expo Go"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: "Celular e Android / Device and Android"
+      placeholder: "Samsung A36, Android 16"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: "3. O que aconteceu? / What happened?"
+      description: "Como chegar ao problema, resultado esperado e observado. Use valores e nomes inventados. / Steps, expected and actual result. Use invented amounts and names."
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: "Detalhes opcionais / Optional details"
+      description: "Captura de tela sem dados pessoais ou erro técnico revisado. Não são exigidos logs. / Redacted screenshot or reviewed technical error. Logs are not required."
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: "Privacidade / Privacy"
+      options:
+        - label: "Revisei este relato e removi dados financeiros pessoais, arquivos reais e segredos. / I reviewed this report and removed personal financial data, real files, and secrets."
+          required: true

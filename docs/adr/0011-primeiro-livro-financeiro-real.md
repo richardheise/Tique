@@ -1,5 +1,7 @@
 # Primeiro livro financeiro real e recuperação conjunta
 
+[English](../en/adr/0011-primeiro-livro-financeiro-real.md)
+
 Recorte autorizado pelo usuário após aprovar a 0.7.1: uma conta Nubank BRL, receitas/despesas manuais e confirmação explícita de notificações, histórico permanente, saldo, resumo mensal por categoria e recuperação cifrada. Em seguida, o usuário propôs carregar dados exportados manualmente do Nubank. Nesta etapa entram abertura e conferência de saldo informadas; a importação de arquivos continua sendo o próximo incremento, dependente de validar os formatos efetivamente disponíveis, sem prometer um layout Nubank.
 
 ## Armazenamento e livro

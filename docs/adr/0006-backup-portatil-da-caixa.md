@@ -1,5 +1,7 @@
 # Backup portátil independente do Keystore
 
+[English](../en/adr/0006-backup-portatil-da-caixa.md)
+
 Em 25/10/2026, o usuário aceitou backup com senha e restauração em uma nova caixa, preservando a anterior, sem mesclar registros. Esta entrega cobre somente a caixa sintética; não libera dados bancários reais.
 
 O formato v1 usa PBKDF2-HMAC-SHA256 com 600.000 iterações, salt aleatório de 16 bytes e chave AES de 256 bits. AES-GCM usa nonce aleatório de 12 bytes e tag de 128 bits; o cabeçalho completo é autenticado como AAD. A senha é usada exatamente como informada, sem trim ou normalização, com UTF-8 no PBKDF2. Só são aceitos o formato/custo conhecidos, arquivos de até 8 MiB de conteúdo e até 10 mil observações; não há custo de KDF arbitrário controlado pelo arquivo. São APIs JCA disponíveis no Android mínimo 26, sem dependência criptográfica nova.

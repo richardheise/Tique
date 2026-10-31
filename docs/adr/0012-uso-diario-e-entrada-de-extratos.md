@@ -1,5 +1,7 @@
 # Uso diário, registro de movimentos e extratos opcionais
 
+[English](../en/adr/0012-uso-diario-e-entrada-de-extratos.md)
+
 Decisão de 30/10/2026, autorizada pelo usuário após definir três telas: Fontes, Movimentos e Análises. O objetivo é acompanhar as movimentações conhecidas, sem reproduzir exatamente o saldo bancário. O usuário avaliará o app em uso normal, sem nova bateria manual obrigatória.
 
 ## Decisões

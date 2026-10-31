@@ -1,5 +1,9 @@
 # Avisos de dependências de terceiros
 
+[English](THIRD_PARTY_NOTICES.en.md)
+
+Este inventário amplo é histórico. As versões atuais estão em `package-lock.json` e no relatório específico do APK; os números abaixo não substituem essa revisão.
+
 O código-fonte do Tique está sob AGPL-3.0-only. O texto completo está em `LICENSE` e também no campo `appLicense` de [`src/legal/notices.json`](src/legal/notices.json).
 
 O inventário npm segue o fechamento de dependências de produção de `package-lock.json`, incluindo opcionais e peers. Também inclui ferramentas de build; a revisão do APK usa separadamente o source map e o grafo Android release, registrados em [legal/apk-components.json](legal/apk-components.json).

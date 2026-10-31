@@ -1,0 +1,32 @@
+name: Ideia / Feature request
+description: Sugira uma melhoria em português ou inglês / Suggest an improvement in Portuguese or English.
+body:
+  - type: checkboxes
+    id: before
+    attributes:
+      label: "Antes de sugerir / Before suggesting"
+      options:
+        - label: "Consultei o README e procurei sugestões semelhantes. / I read the README and searched for similar suggestions."
+          required: true
+        - label: "Marquei sem ler. / I checked without reading."
+          required: false
+  - type: textarea
+    id: need
+    attributes:
+      label: "Que problema você quer resolver? / What problem would you like to solve?"
+      description: "Use um exemplo inventado. / Use an invented example."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: "Como poderia funcionar? / How could it work?"
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: "Privacidade / Privacy"
+      options:
+        - label: "Não incluí dados financeiros pessoais ou segredos. / I did not include personal financial data or secrets."
+          required: true

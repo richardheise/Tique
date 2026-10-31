@@ -1,0 +1,70 @@
+[Português original](../dependencias.md)
+
+# Dependencies: audit dated 22/10/2026
+
+The initial report had 21 alerts: 3 moderate and 18 high. These are three upstream vulnerabilities propagated through the dependency tree, not 21 distinct flaws in the financial code.
+
+The prepared fix keeps Expo 57, React Native 0.86, and Expo Router 57. After a clean install in an isolated copy, `npm audit` reported **18 high, zero moderate, and zero critical**. The two remaining upstream advisories had no published fixed version as of this review.
+
+| Upstream package | Status and handling |
+| --- | --- |
+| `decode-uri-component` via `expo-router → query-string@7.1.3` | Fixed with upstream version 0.5.0. [GHSA-vcc3-ghjq-m6fr](https://github.com/advisories/GHSA-vcc3-ghjq-m6fr) affects versions through 0.4.2. |
+| `braces@3.0.3` via Metro/micromatch | Pending: 3.0.3 is the latest version, and [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) still lists no patch. Described risk: stack exhaustion with deeply nested patterns. |
+| `node-forge@1.4.0` via Expo CLI/code-signing-certificates | Pending: 1.4.0 is the latest version, and [GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv) still lists no patch. Described risk: incorrect validation of RSA PKCS#1 v1.5 signatures. |
+
+The two pending packages belong to the development-tool chain. This does not prove that they are unexploitable on the Metro server or that an APK is free of them; the audit examines versions and the dependency tree, not APK contents. Keep Metro as a development server and close the tunnel when finished. Native financial encryption does not yet exist and will not use this code as a substitute for SQLCipher/Keystore.
+
+Do not run `npm audit fix --force` in this tree: the remediation calculated by npm suggests, among other changes, Expo 44.0.6 and React Native 0.72.17. This breaks the current SDK combination. No advisories were excluded or downgraded to hide alerts. Recheck the two upstream advisories in the next increment; this task remains open.
+
+## Compatibility shim
+
+The fixed `decode-uri-component` version is ESM, while `query-string@7` expects a CommonJS function. Updating only the decoder or forcing `query-string@9` breaks the current Router contract.
+
+The local package `../../vendor/decode-uri-component-compat` adapts the default export to a CommonJS function and preserves the legacy interpretation of `+` as a space. It calls upstream algorithm 0.5.0, installed under the alias `decode-uri-component-fixed`; it does not copy or reimplement the decoder. The override points to the direct local dependency using `$decode-uri-component`, avoiding path resolution relative to the consuming package. The upstream dependency is exact and has a URL/integrity entry in the lockfile.
+
+The shim is original AGPL-3.0-only code; the upstream decoder remains MIT and its notices were included in the inventory. Remove the shim, aliases, and override when an Expo Router version no longer needs this adaptation, and repeat the URL and bundle tests. Do not change the SDK just to make the audit counter disappear.
+
+## Install-script notice
+
+The `postinstall: node install.js` script in `esbuild@0.28.2`, used by `tsx` in tests, was reviewed. It prepares and verifies the platform binary and may fetch the binary package if the optional dependency is missing.
+
+The versioned policy is only:
+
+```json
+"allowScripts": {
+  "esbuild@0.28.2": true
+}
+```
+
+The lockfile preserves `resolved` and `integrity`; npm uses this identity to validate version-specific approval. Do not allow all versions or use a global bypass. Review the script and approval when upgrading esbuild. This approval is supported by npm 11.19.1, which was used for validation. See [npm install-scripts](https://docs.npmjs.com/cli/v11/commands/npm-install-scripts/).
+
+The funding notice is informational and requires no fix.
+
+## Apply after the test in progress
+
+The workspace `node_modules` and active Metro process were preserved. The fix is already in the manifest/lockfile, but only takes effect in the active installation after reinstalling.
+
+Stop Metro with Ctrl+C and run:
+
+```sh
+nvm use
+npm ci
+npm run check
+npm audit
+npm start -- --tunnel
+```
+
+`npm audit` still exits with a nonzero status because of the 18 pending high alerts. Do not chain this command with `&&` if the intent is to start Metro while those issues are known. `npm install-scripts ls` can show scripts that have not yet been reviewed.
+
+## Verification performed
+
+In the isolated copy, with the same delivered code/manifest files:
+
+- `npm ci`: clean install, with no pending esbuild notice.
+- `npm run check`: strict TypeScript and 30 passing tests (27 financial/parsing and 3 URL compatibility/security tests).
+- `npx expo install --check`: dependencies compatible with SDK 57.
+- `npm run export:android`: Android/Hermes bundle generated; no APK was produced.
+- A minimal Android JavaScript test bundle, generated by Metro and run in the Node VM: CommonJS/ESM export, Unicode, repeated parameters, and long malformed input worked. This is not execution on Android/Hermes.
+- `npm audit --json`: 18 high, zero moderate, and two unresolved upstream advisories.
+
+The malformed-input test runs in a subprocess with a five-second limit so that excessive resource use can be interrupted during a regression. The three new tests are in `../../tests/dependencies.test.ts`. Final Expo Go integration on a physical device remains pending; it has not been reported as validated.

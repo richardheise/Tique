@@ -1,95 +1,89 @@
 # Tique
 
-Aplicativo Android livre para organização financeira pessoal no Brasil. **Tique** (Τύχη, *Tyche*) é a deusa grega da fortuna. O projeto se chamava **FFortuna**; esse nome permanece em identificadores internos para preservar atualizações e dados existentes.
+**Português** · [English](README.en.md) · [Contribuir](CONTRIBUTING.md) · [Documentação](docs/README.md)
 
-O **APK próprio** tem um livro financeiro real e cifrado para uma conta BRL: receitas/despesas manuais, confirmação de notificações revisadas, saldo, histórico, categorias/tags, conferências e backup financeiro. A captura de notificações continua sendo um diagnóstico opcional e temporário, sem postagem automática. O **Expo Go** mantém uma demonstração exclusivamente sintética, com caixinhas, compromissos de cartão e importação OFX fictícia; esses recursos ainda não estão habilitados com dados reais no APK.
+Aplicativo Android livre para acompanhar suas movimentações financeiras no Brasil. **Tique** (Τύχη, *Tyche*) é a deusa grega da fortuna. O antigo nome FFortuna permanece em identificadores internos para preservar atualizações e dados.
 
-**[Baixar Tique 1.1.1](https://github.com/richardheise/Tique/releases/download/v1.1.1/tique-arm64.apk)** (versionCode 17): lugares com tags e regras de categoria, sugestões para compras/Pix e anulação auditada de cartão/caixinhas. Foram executados 87 testes Android no emulador Android 16. Atualize por cima, sem desinstalar. [Novidades e limites](docs/releases/v1.1.1.md).
+<img src="assets/branding/icon.png" alt="Símbolo do Tique: dois quadrados dourados e um losango central sobre preto" width="96" />
 
-## Executar no celular
+**[Baixar Tique 1.1.2](https://github.com/richardheise/Tique/releases/download/v1.1.2/tique-arm64.apk)** · [Novidades e limites](docs/releases/v1.1.2.md). Atualize por cima, sem desinstalar. O app acompanha registros conhecidos; não garante reproduzir seu saldo bancário completo.
 
-Use Node 24, npm e Expo Go para Android compatível com SDK 57. Com nvm instalado:
+## O que funciona no APK
+
+- Análises como tela inicial e Movimentos como segunda aba; gráficos por categoria e comparação mensal.
+- Entradas/despesas manuais e revisão individual ou em lote de notificações e extratos CSV/OFX de conta.
+- Categorias, tags e regras locais por descrição ou estabelecimento. Um lugar pode ter nomes alternativos e uma tag própria, com categoria opcional.
+- Caixinhas com modalidade, posição informada, aportes, resgates, transferências entre caixinhas e ajustes explícitos.
+- Cartões, compras, fechamento/vencimento e pagamentos parciais de faturas. Compra é despesa uma vez; pagamento não repete a despesa.
+- Anulação auditada, preservando original e motivo; dependências inconsistentes bloqueiam a operação sem gravação parcial.
+- Livro nativo SQLCipher, recuperação local automática e backup portátil com senha. Backups financeiros incluem confirmados e configurações, sem pendências ou notificações brutas.
+- Captura diária consentida pelo Android, persistida antes do processamento e independente de JavaScript. Sugestões de campos preservam origem e correções humanas.
+
+Pix é meio de pagamento, não receita ou despesa. Notificações podem faltar e os textos podem ser insuficientes: **não há parser Nubank certificado por amostras reais nem lançamento automático novo**. Não há backend, conta externa, telemetria do app, credenciais bancárias ou INTERNET no APK release. Abrir o Nubank é apenas um atalho; não lê telas ou operações privadas.
+
+Parcelamentos, estornos financeiros, despesas compartilhadas e projeções completas permanecem futuros. Caixinhas são posições informadas, sem rentabilidade automática. Ciclos de cartão usam dias 1–28; confira sua fatura. Veja [as notas da versão](docs/releases/v1.1.2.md) e [o glossário](GLOSSARY.md).
+
+## Desenvolver e testar
+
+Use Node 24 (`.nvmrc`). Expo 57, React Native 0.86 e React 19.2 são as versões fixadas. Confira compatibilidade antes de atualizar dependências.
 
 ```sh
-cd /home/heise/FFortuna
 nvm use
 npm ci
+npm run check
+```
+
+### Demonstração — Expo Go
+
+```sh
 npm start -- --lan
 ```
 
-Computador e celular devem estar na mesma rede. Abra o Expo Go e escaneie o QR do terminal. Não exige conta Expo, EAS ou assinatura. O [roteiro no celular](docs/teste-no-celular.md) traz entradas e resultados esperados.
+Computador e celular devem estar na mesma rede; abra o QR no Expo Go compatível com SDK 57. Em SSH, `npm start -- --tunnel` usa um intermediário de desenvolvimento. A demonstração aceita **somente dados fictícios**, em SQLite local sem criptografia. Não captura notificações reais ou importa seus arquivos financeiros. Expo Go não executa o módulo Kotlin personalizado.
 
-O projeto fixa Expo 57 / React Native 0.86 / React 19.2; foi seguida a [orientação oficial durante a transição do Expo Go](https://docs.expo.dev/get-started/create-a-project/). Se o Expo Go instalado informar incompatibilidade, use uma [versão Android compatível](https://expo.dev/go), sem misturar dependências de SDKs diferentes. A combinação foi conferida com `npx expo install --check`.
+### APK Android local
 
-Expo Go é o aplicativo hospedeiro desta demonstração. APK da prova de marca atual disponível localmente em `artifacts/tique-arm64.apk` (0.9.0, versionCode 12); a cópia imutável de conteúdo 0.6.0 está em `artifacts/releases/v0.6.0-alpha.1/`. O roteiro de captura 0.2.1 foi aprovado pelo usuário no Galaxy A36/Android 16; o roteiro de backup/restauração 0.3.0 também foi aprovado em 25/10/2026. O módulo Kotlin e o APK da prova sintética usam um [build Android próprio](https://docs.expo.dev/guides/local-app-development/); Expo Go não executa módulos nativos personalizados. Os comandos e critérios estão em [captura-nativa.md](docs/captura-nativa.md). O livro real da 0.8.0 exige o APK próprio; a demonstração Expo Go continua sintética.
-
-## O que funciona
-
-- No APK: dashboard com gráficos nativos, resumo mensal, busca/filtros e navegação Início/Movimentos/Revisão/Mais.
-- No APK: livro real com abertura, receitas/despesas manuais, confirmação de notificações, saldo e histórico mensal por categoria/tag. Anulação com motivo e conferência sem ajuste silencioso; backups financeiros incluem catálogo, livro e proveniência mínima.
-- Conta fictícia com data e saldo de abertura; renda mensal prevista separada dos recebimentos.
-- Receita, despesa e movimentação entre conta e caixinha; saldo atual, histórico filtrado por mês e gastos por categoria.
-- Caixinhas por nome/modalidade, posição inicial, guardar, resgatar e ajuste explícito com motivo.
-- Dívidas iniciais do cartão por vencimento, pagamentos parciais e saldo restante, sem criar nova despesa.
-- Evento sintético seguro lançado automaticamente; evento incompleto revisável; evidência, campos extraídos e correção preservados.
-- Reprocessamento idempotente, confirmação repetida sem duplicação, compras iguais independentes e atualização conflitante sem alterar decisão anterior.
-- Três OFX embutidos: período atual, sobreposição e histórico anterior. Prévia, revisão, vínculo assistido e conferência explícita da abertura histórica.
-- Migrações versionadas e persistência local. Licença e avisos disponíveis no botão Sobre e licenças.
-- Na prova nativa: recuperação local automática com até três cópias cifradas, sem bruto, no máximo uma a cada 24 horas com alterações. Gerenciamento pela interface em configurações avançadas, junto ao backup portátil com senha, caixas anteriores e verificações isoladas de segurança. As cópias internas são perdidas ao desinstalar; não incluem o livro Expo Go.
-- Diagnóstico real opcional: origem instalada verificada, sessão de até 24 horas/200 observações, caixa cifrada separada e retenção de 7 dias. Revisão assistida obrigatória, exportação com senha somente dos campos confirmados e conferência local do arquivo. Parser BRL preliminar e genérico, sem lançamentos. [Política e roteiro](docs/diagnostico-local.md).
-- Prévia de valores reais do original, evidência por campo e revisão local que resiste a reprocessamento. Dados temporários do diagnóstico, sem natureza/conta/data adivinhadas e sem transações automáticas. [Roteiro 0.6.0](docs/previa-brl.md).
-- Retenção nativa de bruto por 30 dias desde a captura, também na caixa anterior, com limpeza bloqueada explícita em caso de chave indisponível.
-
-O saldo atual é acumulado; receitas, despesas e categorias seguem o mês selecionado. Alterar a renda prevista não deposita dinheiro. Posições iniciais, transferências, ajustes e pagamentos de dívida não inflam receita ou consumo. Caixinhas são posições informadas; não calculam rentabilidade, impostos ou liquidez. Compromissos iniciais não reconstroem compras antigas nem parcelamentos.
-
-Estado da sessão e próximos passos em [continuidade](docs/continuidade.md). O checkpoint histórico de conteúdo [`v0.6.0-alpha.1`](https://github.com/richardheise/Tique/releases/tag/v0.6.0-alpha.1), publicado sob a marca anterior, permanece imutável. A tag de marca [`v0.6.1-alpha.1`](https://github.com/richardheise/Tique/releases/tag/v0.6.1-alpha.1) foi publicada com APK, fonte e checksums. Para acesso por SSH, use `npm start -- --tunnel`; esse modo usa um intermediário de desenvolvimento e dispensa estar na mesma rede.
-
-## Verificação
+Sem EAS, conta Expo ou serviço pago. Configure JDK/SDK e a assinatura conforme [captura nativa](docs/captura-nativa.md). Preserve chaves e bancos existentes.
 
 ```sh
-npm run check
-npm run export:android
+npm run native:build -- --compile-device-tests
 ```
 
-Na validação inicial da demonstração, foram executados em cópia isolada: TypeScript estrito, **30 testes de comportamento aprovados** e exportação Android pelo Metro/Hermes. Na 0.11.0, TypeScript estrito e **42 testes** passaram; o build nativo aprovou **61 testes JVM** e compilou 77 testes Android, sem executar o runner no servidor. Os testes usam SQLite real via `node:sqlite`, incluindo banco em arquivo, reabertura, migrações, restrições do livro, limites monetários, importação atômica e processamento recuperável. A exportação produz um **bundle em `dist/`, não um APK**.
+Saída: `artifacts/tique-arm64.apk`. O script limita a compilação a 12 GiB/16 CPUs. Não execute builds nativos em paralelo.
 
-Uma checagem adicional no Chromium, com interface React Native Web e serviço real sobre SQLite em memória, percorreu os formulários, revisão, caixinhas, pagamentos, importações e licenças. Esse harness temporário não é uma plataforma web do produto e não valida módulos nativos, teclado Android ou persistência do Expo Go. O usuário testou e aprovou a demonstração no celular em 22/10/2026; modelo, versão Android e percurso detalhado não foram registrados. A correção posterior das dependências ainda precisa ser instalada e conferida no aparelho. A toolchain Android e o ADB foram instalados para a prova nativa; nenhum aparelho está conectado e os testes instrumentados ainda não foram executados. `expo-doctor` foi interrompido sem resultado; não é um check aprovado. O servidor Metro iniciou, mas a sondagem HTTP local não foi confirmada neste ambiente.
+Com emulador Android x86_64 conectado, os testes instrumentados usam:
 
-O ajuste das dependências reduziu o audit de 21 para 18 alertas; os 18 restantes decorrem de duas falhas upstream ainda sem patch. A aprovação do esbuild está limitada à versão instalada. Veja [tratamento e instruções para aplicar](docs/dependencias.md). A instalação ativa foi preservada durante o teste do usuário; execute `npm ci` após parar o Metro.
+```sh
+npm run native:test -- --run-device-tests
+```
 
-## Arquitetura
+O modo reserva até 8 GiB/12 CPUs ao Gradle e até 4 GiB/4 CPUs ao emulador. Desligue o emulador antes do build ARM64. Expo Go, Metro, downloads e ferramentas de desenvolvimento podem usar rede; isso é separado do funcionamento offline do APK final.
 
-Monólito modular, sem backend. Não há API remota, conta externa, telemetria do aplicativo ou credenciais bancárias.
+Na 1.1.1, **46 testes TypeScript, 72 JVM e 87 testes Android** passaram. Os testes Android foram executados no emulador Android 16 x86_64; não são validação física no Samsung A36 nem de notificações reais do Nubank. Resultados específicos de cada versão estão nas notas de release. Não confunda testes compilados com executados. Não é exigida uma nova bateria manual do usuário.
+
+## Arquitetura e privacidade
+
+Monólito modular. No APK real, Kotlin possui o livro, as migrações e o executor serial; a interface TypeScript usa Expo Modules API. Uma caixa cifrada de evidências alimenta candidatos revisáveis e um único livro financeiro com lançamentos equilibrados, centavos inteiros seguros, vínculos e comandos idempotentes. Publicação, captura e data efetiva são informações distintas. Valor e dia iguais não provam duplicidade.
 
 | Local | Responsabilidade |
 | --- | --- |
-| `src/core/` | Contratos tipados, valores em centavos inteiros e datas. |
-| `src/application/demo-service.ts` | Operações financeiras, processamento, classificação determinística e importação da demonstração. |
-| `src/processing/` | Parsing sintético e subconjunto OFX, confiança e evidência por campo. |
-| `src/persistence/` | Migrações, transações e adaptador expo-sqlite. |
-| `src/demo/` | Fixtures, captura simulada e inicialização do ambiente sintético. |
-| `app/`, `src/ui/`, `src/legal/` | Navegação, formulários, consultas e avisos locais. |
+| `modules/ffortuna-capture/` | Captura Android, parsing, livro SQLCipher, regras, migrações e recuperação. |
+| `src/capture/` | Interface real, revisão, classificações, recursos e análises. |
+| `src/core/`, `src/application/`, `src/processing/`, `src/persistence/`, `src/demo/` | Domínio e serviço da demonstração sintética; não sincronizam outro livro real. |
+| `app/`, `src/ui/`, `src/legal/` | Navegação, tipografia, componentes e avisos. |
 
-O serviço da demonstração é o único escritor: serializa comandos e consultas, executa migrações antes de liberar o uso e confirma livro, vínculos e estado atomicamente. Eventos são persistidos antes do processamento. Identidade da fonte/revisão, unicidade e comandos idempotentes protegem contra repetição; valor/data servem como indício de ambiguidade, nunca como prova de duplicação. Lançamentos confirmados são equilibrados e imutáveis no banco.
+Originais diários têm retenção limitada a 30 dias, limpa quando o núcleo executar. Observações estruturadas e registros confirmados persistem. O diagnóstico antigo é separado, opcional e temporário. Force-stop, reinício, revogação e políticas do Android podem interromper a captura. Bloqueio biométrico não substitui criptografia.
 
-O contrato distingue evento observado, parsing versionado, candidato, decisão humana, transação e vínculos. Publicação, captura e data efetiva são campos distintos. Os parsers financeiros da demonstração aceitam fontes sintéticas reconhecidas. O diagnóstico adiciona um extrator genérico de BRL para o original, sem templates bancários; **não há parser Nubank validado**.
+Cópias internas são perdidas ao desinstalar. Para trocar de aparelho, exporte um backup com senha e guarde o arquivo e a senha. **Nunca envie ao GitHub notificações reais, extratos, bancos, backups, chaves ou credenciais.** Use fixtures inventadas e remova informações pessoais de relatos de erro.
 
-No modo real, Kotlin é dono do banco SQLCipher que reúne catálogo e livro, das migrações e do processamento; a captura persiste mesmo sem JavaScript ativo. A interface chamará operações pela Expo Modules API. O adaptador TypeScript existe apenas para dados sintéticos, sem sincronizar dois livros. O custo dessa escolha é manter duas implementações de serviço e verificar equivalência dos contratos; Kotlin integral simplificaria essa integração. Veja os [ADRs](docs/adr/) e o [alinhamento aceito](docs/alinhamento-inicial.md).
+## Contribuir e documentação
 
-## Privacidade e limites desta entrega
+Issues e contribuições são bem-vindas em português ou inglês. Leia [CONTRIBUTING.md](CONTRIBUTING.md), consulte [a documentação](docs/README.md) e use os [formulários de issue](https://github.com/richardheise/Tique/issues/new/choose). Português é o idioma atual da interface; documentação bilíngue não implica tradução do app.
 
-Use **somente informações inventadas** na demonstração financeira e nos exemplos sintéticos. O banco `ffortuna-synthetic-v1.db` desta demonstração não é criptografado. Não há seletor de arquivos pessoais nem acesso a notificações. Os três OFX são gerados pelo projeto, sem alegar que reproduzem arquivos Nubank. O parser cobre um subconjunto limitado de OFX; a validação de uma exportação real ficará no modo protegido.
-
-O núcleo não envia dados a terceiros. Downloads de dependências, Expo Go e Metro pertencem ao ambiente de desenvolvimento e podem precisar de rede; os scripts desativam a telemetria do CLI Expo. Isso não transforma o Expo Go em um APK release próprio offline. O APK da prova sintética foi inspecionado sem permissão INTERNET e traz JavaScript embutido; o usuário relatou aprovação do roteiro manual de captura sintética no A36. Os testes instrumentados ainda não foram executados.
-
-O livro real registra receitas/despesas revisadas. A 0.10.0 acrescenta captura diária consentida e extratos opcionais em staging cifrado. Cartões, caixinhas, transferências, estornos e projeção ainda precisam de tratamento próprio; não devem ser forçados como receita/despesa. A captura diária verifica chave/banco internamente, sem exigir bateria manual. O diagnóstico antigo mantém seu consentimento e limites separados; a confirmação financeira continua explícita. Não há parser Nubank validado ou promessa de captura completa. Bloqueio biométrico da interface não substitui criptografia. Nunca adicione extratos, amostras reais, bancos, backups, keystores ou credenciais ao Git.
-
-## Próximo incremento
-
-Após o primeiro livro real da 0.8.0, o usuário autorizou o dashboard e a navegação da 0.9.0. Validar no celular os gráficos, filtros, revisão e preservação do livro. Em seguida, priorizar importação de um extrato exportado pelo usuário, com staging, prévia e reconciliação, respeitando o formato disponível e sem exigir que o usuário programe ou transforme dados. Nenhuma amostra real foi examinada aqui, e nenhum formato Nubank foi presumido.
+[Continuidade](docs/continuidade.md) · [Decisões de arquitetura](docs/adr/) · [Dependências](docs/dependencias.md) · [Verificação de licenças](docs/revisao-licencas-apk.md)
 
 ## Licença
 
-Código original sob [GNU AGPL v3](LICENSE), identificador `AGPL-3.0-only`. Dependências e fontes preservam suas licenças: [inventário npm amplo](THIRD_PARTY_NOTICES.md) e [revisão específica do APK](docs/revisao-licencas-apk.md). A revisão identificou zero pendências de textos nos componentes deste APK; avisos e AGPL estão incluídos nele. Uma distribuição deve levar o fonte correspondente à mesma revisão. Para atualizar os inventários e repetir a conferência, siga os comandos do relatório.
+Código original sob [AGPL-3.0-only](LICENSE). Dependências e fontes preservam suas licenças: [avisos](THIRD_PARTY_NOTICES.md), [inventário do APK](legal/apk-components.json) e [revisão](docs/revisao-licencas-apk.md). Releases incluem APK, fonte correspondente, avisos e checksums. Space Grotesk usa OFL-1.1.
 
-Finan+ e PennyWise foram referências conceituais: nenhum código ou asset desses projetos foi incorporado. Não há afiliação com eles ou com o Nubank. Termos do domínio estão em [GLOSSARY.md](GLOSSARY.md).
+Finan+ e PennyWise são referências conceituais, sem código ou assets incorporados. Não há afiliação com esses projetos ou com o Nubank. Nomes de código e termos de licença originais não são traduzidos.

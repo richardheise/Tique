@@ -1,5 +1,7 @@
 # Recursos financeiros e classificação na versão 1.0
 
+[English](../en/adr/0014-recursos-e-classificacao-1-0.md)
+
 Decisão de 31/10/2026, após o usuário autorizar os incrementos pendentes e a publicação da versão 1.0.
 
 O livro cifrado permanece único. O esquema 4 estende o esquema 3 com recursos (caixinhas e cartões), compromissos/faturas e um diário equilibrado de movimentos patrimoniais. Os registros anteriores não são reescritos. Compras no cartão entram nas despesas pela data da compra; pagamento de fatura reduz caixa e dívida sem repetir a despesa. Dívida anterior é posição inicial, não consumo novo. Aporte/resgate e transferência entre caixinhas são movimentos internos, fora de receita/despesa. Posições informadas não são consulta ao Nubank nem garantia de saldo ou patrimônio completos.

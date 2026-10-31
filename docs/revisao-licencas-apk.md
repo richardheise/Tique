@@ -1,5 +1,7 @@
 # Revisão de licenças — APK de captura sintética
 
+[English](en/revisao-licencas-apk.md)
+
 Revisão técnica concluída em 23/10/2026 e reconferida em 26/10/2026 na versão 0.6.0 para o APK `capture-poc`, release, arm64-v8a. Não foram encontradas pendências de textos de licença ou de atribuição no inventário identificado abaixo. Isso não equivale a validar o funcionamento no celular ou a certificar juridicamente qualquer distribuição futura.
 
 ## Escopo e evidências

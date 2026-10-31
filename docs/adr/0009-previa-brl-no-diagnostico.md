@@ -1,5 +1,7 @@
 # Prévia BRL temporária no diagnóstico
 
+[English](../en/adr/0009-previa-brl-no-diagnostico.md)
+
 Incremento 0.6 autorizado pelo usuário em 30/10/2026. Não há amostras reais ou revisadas disponíveis neste ambiente; portanto, esta etapa não inventa regras de notificações Nubank. O parser é genérico e limitado a evidências textuais de valores BRL.
 
 `notification-brl/1` reconhece somente valores com marcador `R$` ou `BRL`, vírgula decimal seguida por exatamente dois dígitos e, opcionalmente, grupos de milhar separados por ponto. Espaços Unicode podem separar o marcador do número, mas não agrupam os dígitos. O valor é calculado em centavos inteiros, limitado a `9.007.199.254.740.991`, máximo inteiro exato do JavaScript. Não há conversão por ponto flutuante. Valores sem marcador, múltiplos ou inválidos ficam sem escolha. Incompletos, negativos, zero, truncados, agrupamentos inválidos ou acima do limite também não são escolhidos. Evidências preservam o trecho original exato, o campo e offsets UTF-16, junto à versão do parser.

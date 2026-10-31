@@ -1,0 +1,17 @@
+[Português](../../adr/0006-backup-portatil-da-caixa.md)
+
+# Portable backup independent of Keystore
+
+On 25/10/2026, the user accepted password-protected backup and restoration into a new vault, preserving the previous one without merging records. This release covers only the synthetic vault; it does not enable real banking data.
+
+Format v1 uses PBKDF2-HMAC-SHA256 with 600,000 iterations, a random 16-byte salt, and a 256-bit AES key. AES-GCM uses a random 12-byte nonce and a 128-bit tag; the complete header is authenticated as AAD. The password is used exactly as entered, without trimming or normalization, with UTF-8 in PBKDF2. Only known format/cost values are accepted, files are limited to 8 MiB of content and 10,000 observations; the file cannot set an arbitrary KDF cost. These are JCA APIs available on Android minimum 26, with no new cryptographic dependency.
+
+Alternatives: copying the database with its wrapped key would remain dependent on the old Keystore; exporting the local key would weaken its protection; Argon2id would require another maintained library and native integration. PBKDF2 is simpler for this release and has an explicit OWASP-recommended cost, but is less resistant to parallel hardware than Argon2id. Its cost needs measuring on the A36. The format is versioned for future migration.
+
+The file preserves identities, revisions, times, fingerprints, parsing, and state. It does not export raw payloads, consent, keys, preferences, or auxiliary files. Restored pending observations without raw data are shown as not reprocessable instead of remaining in the processable queue.
+
+JSON and derivation are handled in bounded memory; there is no plaintext temporary file. The SAF picker writes/reads only the encrypted file, without copying it to cache, and requests local destinations. The platform/provider controls the picker interface; the user must choose on-device storage. The APK remains without INTERNET and does not start a remote connection. JavaScript/JVM strings and internal library buffers prevent promising complete memory erasure; passwords are cleared from fields when an operation starts or the screen exits, are not persisted/logged, and temporary arrays are cleared where controllable.
+
+During restoration, authentication and validation happen before any vault change. A durable staging name allows an incomplete encrypted vault to be removed after interruption. The new vault is imported in a SQLCipher transaction and its integrity is checked before publishing the active pointer. The active/previous pointer and disabled consent are written together. There is at most one previous vault: another restore requires its explicit disposal. Switching vaults checks the destination key/integrity and keeps both sets separate. The previous vault is not a substitute for portable backup: its key remains local and may be lost.
+
+Sources: [Android SecretKeyFactory](https://developer.android.com/reference/javax/crypto/SecretKeyFactory), [Cipher](https://developer.android.com/reference/javax/crypto/Cipher), [Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files), [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html), and [Cryptographic Storage](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html). The activity-result contract was checked in the installed Expo Modules Core code, without registering passwords/payloads in the restorable contract input.

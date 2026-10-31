@@ -1,5 +1,7 @@
 # Livro financeiro equilibrado com interface simples
 
+[English](../en/adr/0003-livro-equilibrado-minimo.md)
+
 O usuário aceitou um livro interno mínimo de lançamentos equilibrados: receitas, despesas e movimentos entre recursos próprios têm contrapartidas, enquanto a interface usa ações financeiras comuns. A alternativa seria registrar apenas receitas/despesas e acrescentar exceções conforme surgissem caixinhas, cartão e estornos; o livro oferece uma regra uniforme já para distinguir consumo de dinheiro guardado na sua única instituição bancária.
 
 Consequências: exigir validações e gravações atômicas adicionais; não expor um plano contábil configurável nesta entrega. Equilíbrio não comprova completude, classificação correta ou identidade da transação. Posições iniciais, compromissos anteriores e ajustes têm contrapartidas próprias; não serão convertidos silenciosamente em receita/despesa.

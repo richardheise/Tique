@@ -1,5 +1,7 @@
 # Recuperação local automática e retenção de caixas inativas
 
+[English](../en/adr/0007-recuperacao-local-e-retencao.md)
+
 Decisão aceita pelo usuário em 25/10/2026. O uso normal não deve exigir gerenciamento de arquivos Android. Esta implementação cobre exclusivamente a prova sintética; não libera dados reais.
 
 O padrão é manter até três cópias cifradas privadas, sem payloads brutos, criadas pelo executor Kotlin quando o núcleo executar. Há no máximo uma cópia por intervalo de 24 horas e somente com alterações nos registros/parsing. A primeira cópia não vazia pode ser criada imediatamente. Um relógio que volte no tempo adia a próxima cópia; não abre exceção ao intervalo. Não há agendamento permanente, serviço adicional ou dependência do JavaScript. Após force-stop, o trabalho espera o núcleo voltar a executar.

@@ -1,5 +1,7 @@
 # Categorias e tags gerenciadas
 
+[English](../en/adr/0010-categorias-e-tags-do-diagnostico.md)
+
 Decisão aceita em 30/10/2026: uma categoria principal opcional e várias tags opcionais por revisão de notificação. O usuário confirmou esse modelo após aprovar funcionalmente a 0.6.1. Natureza financeira (receita, despesa, transferência ou outra) permanece independente da classificação temática.
 
 O catálogo possui IDs UUID estáveis e nomes editáveis. Começa com oito categorias locais: Comida, Lazer, Contas, Transporte, Saúde, Educação, Compras e Outros. Sem seleção, a prévia fica “A classificar”. Tags começam vazias. Criar, renomear, arquivar e reativar são operações explícitas; arquivar impede novas seleções, preservando as anteriores. Não há exclusão definitiva nem regra automática criada por uma correção. Nomes têm até 80 caracteres, normalização NFC e unicidade por tipo sem distinção de caixa, inclusive entre opções arquivadas. Limites: 200 opções no total e 20 tags por revisão.

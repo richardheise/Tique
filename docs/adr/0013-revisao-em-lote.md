@@ -1,5 +1,7 @@
 # Revisão explícita em lote e duas abas
 
+[English](../en/adr/0013-revisao-em-lote.md)
+
 Decisão de 31/10/2026, para a entrega solicitada em `docs/prompt-sol-uso-diario.md`.
 
 Movimentos e Análises são os destinos diários. Dados e captura fica nas configurações, mantendo o compartilhamento Android e a importação opcionais.

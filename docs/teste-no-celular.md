@@ -1,5 +1,7 @@
 # Testar a demonstração no Android
 
+[English](en/teste-no-celular.md)
+
 O usuário informou em 22/10/2026 que testou e aprovou a demonstração no celular, sem detalhar aparelho ou cada etapa. A correção posterior das dependências ainda precisa de instalação e conferência.
 
 Este roteiro usa exclusivamente valores inventados. Ele é um roteiro a executar no aparelho, não um relato de teste físico já realizado. A entrega roda dentro do Expo Go; ainda não existe APK próprio do FFortuna.

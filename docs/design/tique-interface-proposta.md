@@ -1,5 +1,7 @@
 # Tique — interface e uso diário
 
+[English](../en/design/tique-interface-proposta.md)
+
 ## Direção 1.0
 
 Análises é a primeira aba e a abertura padrão, seguida de Movimentos. Fonte Space Grotesk incluída no APK (Regular, Medium e Bold), com adaptação dos pesos por componente. Tarefas usam textos curtos para leigos; segurança, captura, retenção e cópias são explicadas em Sobre o Tique nas configurações. Avisos de perda de dados/irreversibilidade permanecem próximos das ações. A paleta e as formas retas aprovadas são preservadas. Reclassificação, regras e caixinhas/cartões são painéis, sem criar novas abas.

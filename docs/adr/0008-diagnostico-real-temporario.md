@@ -1,5 +1,7 @@
 # Diagnóstico temporário de notificações reais
 
+[English](../en/adr/0008-diagnostico-real-temporario.md)
+
 Decisão autorizada pelo usuário em 26/10/2026 (“manda a ver”). O recurso é uma ferramenta local e temporária de revisão de notificações do pacote `com.nu.production`, listado na [Google Play](https://play.google.com/store/apps/details?id=com.nu.production). A presença do pacote e a assinatura instalada são verificadas no aparelho. A assinatura observada funciona como confiança na primeira utilização (TOFU); não comprova que o publicador seja oficial. Mudança ou indisponibilidade da origem pausa a sessão.
 
 Iniciar uma sessão exige as 40 verificações sintéticas desta versão aprovadas no processo atual; falhas e itens não verificados bloqueiam o início. O resultado não é persistido como autorização permanente. Uma sessão já consentida pode continuar ao recriar apenas o processo no mesmo boot, dentro do prazo original.

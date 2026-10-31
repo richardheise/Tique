@@ -1,5 +1,7 @@
 # Tique — Finanças pessoais
 
+[English](GLOSSARY.en.md)
+
 Vocabulário do aplicativo para distinguir fatos observados, decisões do usuário e seus efeitos financeiros.
 
 ## Linguagem

@@ -1,5 +1,7 @@
 # Correção auditada, pistas de captura e estabelecimentos
 
+[English](../en/adr/0015-correcao-captura-e-estabelecimentos.md)
+
 Decisão de 31/10/2026. O usuário priorizou anulação segura, execução dos testes Android e melhoria da captura, com foco em compras e Pix. Pediu que o lugar fosse uma tag, exemplificando BLUMENAUENSE → Comida, e autorizou pedir o preenchimento ao usuário dentro do app.
 
 ## Decisões

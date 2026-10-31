@@ -1,5 +1,7 @@
 # Prévia de valores BRL — roteiro 0.6.0
 
+[English](en/previa-brl.md)
+
 Este roteiro descreve a versão de conteúdo 0.6.0, incluída no build de marca Tique 0.6.1 (versionCode 7). A nova marca preserva o application ID e os dados do app anterior para permitir atualização. O build 0.6.1 foi publicado e aprovado funcionalmente pelo usuário em 30/10/2026, sem contadores individuais informados. Na 0.7.0, siga também o roteiro de categorias e tags; a bateria passou a 60 verificações.
 
 A 0.6.0 interpreta o texto original de uma observação em uma prévia revisável, dentro do diagnóstico cifrado. Não há amostras revisadas disponíveis neste ambiente para fundamentar templates do Nubank. O parser `notification-brl/1` é genérico: reconhece valores explicitamente marcados por `R$` ou `BRL`, com vírgula e dois decimais, sem adivinhar a movimentação.

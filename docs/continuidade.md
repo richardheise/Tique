@@ -1,5 +1,14 @@
 # Continuidade — Tique 1.1.1
 
+## Entrega 1.1.2 — ícone e documentação bilíngue
+
+O usuário pediu usar no Android o símbolo já presente no cabeçalho, documentação em português/inglês, guia de contribuição e formulários com checkboxes no estilo do end-4. SVGs originais do símbolo geram PNGs normal/adaptativo/monocromático sem nova dependência no APK. README foi reescrito com o estado atual para remover afirmações históricas contraditórias; documentos técnicos e históricos têm tradução integral, sem traduzir textos normativos de licenças. Foram conferidos 45 pares PT/EN, links, hashes e blocos de código. CONTRIBUTING explica contribuições nos dois idiomas. Os formulários bilíngues exigem leitura/privacidade; atualização e checkbox de leitura desatenta são opcionais. Não há auto-close de issues.
+
+Build ARM64 e inspeção aprovados: mesma assinatura, versão 1.1.2/code18, sem INTERNET, backup Android desabilitado, 23 bibliotecas alinhadas a 16 KiB. Ícones padrão, redondo, adaptativo e monocromático conferidos nos recursos compilados; fundo preto `#080B10`. A suíte JVM existente executou 72 testes sem falhas. Validados 45 pares de documentos, links locais, comandos e hashes nas traduções, além do YAML e dos checkboxes dos formulários. APK de 46853282 bytes, SHA-256 `454a2367ccb26de896e02d0b3f5660344b7b18682f005dfc6ce8866af3378402`. Não houve nova execução dos testes Android nesta alteração de ícone/documentação; os 87 aprovados na 1.1.1 permanecem um resultado anterior.
+
+
+[English](en/continuidade.md)
+
 ## Entrega 1.1.1 — lugares, captura e correção
 
 Usuário priorizou os itens 1–3: anulação segura, executar testes Android e melhorar captura Nubank, com foco em compras e Pix. Acrescentou identificação do estabelecimento como tag e categoria separada (BLUMENAUENSE → Comida), com preenchimento pelo usuário no próprio app. Implementado sem Markov/IA: regras determinísticas por nome/aliases e revisão explícita; padrões por semelhança não são aplicação automática. [ADR 0015](adr/0015-correcao-captura-e-estabelecimentos.md), [notas](releases/v1.1.1.md).

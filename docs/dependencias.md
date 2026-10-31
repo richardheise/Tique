@@ -1,5 +1,7 @@
 # Dependências: auditoria de 22/10/2026
 
+[English](en/dependencias.md)
+
 O relatório inicial tinha 21 alertas: 3 moderados e 18 altos. São três falhas de origem propagadas pela árvore de dependências, não 21 falhas distintas do código financeiro.
 
 A correção preparada mantém Expo 57, React Native 0.86 e Expo Router 57. Após instalação limpa na cópia isolada, `npm audit` passou a informar **18 altos, zero moderados e zero críticos**. Os dois avisos de origem ainda pendentes não têm versão corrigida publicada na data desta revisão.

@@ -1,5 +1,7 @@
 # FFortuna — Entendimento consolidado
 
+[English](en/alinhamento-inicial.md)
+
 Status: recorte confirmado pelo usuário; demonstração implementada. A discussão começou em 21/10/2026. TypeScript, 30 testes e bundle Android verificados. O usuário aprovou a demonstração no celular em 22/10/2026; a correção posterior de dependências aguarda instalação e conferência no aparelho. Execução e limites atuais em [README](../README.md) e [roteiro no aparelho](teste-no-celular.md).
 
 ## Objetivo e decisões
