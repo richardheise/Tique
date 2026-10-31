@@ -375,4 +375,55 @@ class FinancialResourcesTest {
             } finally { backup.fill(0) }
         }
     }
+
+    @Test fun merchantPlaceTagIsAppliedToNewBatchAndCardPurchaseWithoutChangingReplayIntent() {
+        SecuritySandbox(InstrumentationRegistry.getInstrumentation().targetContext).use { sandbox ->
+            ClassificationCatalog(sandbox.context, sandbox.newName(), true).use { catalog ->
+                val ledger = catalog.ledger()
+                val date = LocalDate.now().toString()
+                val categoryId = catalog.snapshot().first { it["kind"] == "category" && it["name"] == "Compras" }["id"] as String
+                val rule = ledger.saveMetadataRule(JSONObject().put("description", "Loja Fictícia")
+                    .put("matchMode", "merchant").put("aliases", JSONArray().put("Loja Fictícia Online"))
+                    .put("categoryId", categoryId).put("category", "Compras").put("tagIds", JSONArray()).toString())
+                val placeTagId = rule["merchantTagId"] as String
+                val description = "Compra na Loja Fictícia"
+                assertEquals(placeTagId, ledger.suggestMetadata(description)?.get("merchantTagId"))
+
+                val eventId = uuid()
+                val captured = java.time.Instant.now().toString()
+                val source = mapOf("eventId" to eventId, "packageName" to DiagnosticPolicy.PACKAGE,
+                    "sourceKey" to "invented-merchant-batch", "revision" to 1, "publishedAt" to captured,
+                    "capturedAt" to captured, "parserVersion" to BrlNotificationParser.VERSION,
+                    "fieldEvidence" to emptyMap<String, Any?>(), "confidence" to mapOf("movement" to "certain",
+                        "amount" to "certain", "nature" to "certain", "account" to "missing", "date" to "certain", "category" to "missing"))
+                val item = ObservedBatchPost(eventId, 500, "expense", date, description, "A classificar", null, emptyList(), source)
+                val first = ledger.confirmObservedBatch(listOf(item))
+                val batchTransactionId = ledger.transactionForEvent(eventId)?.get("id") as String
+                val batchFields = ledger.transactionForEvent(eventId)?.get("fields") as Map<String, Any?>
+                assertEquals(listOf(placeTagId), batchFields["tagIds"])
+                assertEquals(null, batchFields["categoryId"]) // The place rule adds its tag; it does not replace the user's category choice.
+                assertEquals(batchTransactionId, ledger.confirmObservedBatch(listOf(item)).let { ledger.transactionForEvent(eventId)?.get("id") })
+                assertEquals(1, first["registered"])
+                val batchRequest = JSONObject(ledger.rows("finance_transactions").single { it["id"] == batchTransactionId }["request_json"] as String)
+                assertEquals(0, batchRequest.getJSONArray("tagIds").length())
+                assertEquals(1, ledger.rows("finance_metadata_audit").size)
+
+                val cardId = ledger.createCard(json(uuid(), JSONObject().put("name", "Cartão de teste merchant")
+                    .put("closingDay", 20).put("dueDay", 5)))
+                val command = uuid()
+                val purchase = JSONObject().put("cardId", cardId).put("amountCents", 700).put("effectiveDate", date)
+                    .put("description", description).put("category", "A classificar").put("categoryId", JSONObject.NULL)
+                    .put("tagIds", JSONArray()).put("notes", "")
+                val cardTransactionId = ledger.cardPurchase(json(command, JSONObject(purchase.toString())))
+                assertEquals(cardTransactionId, ledger.cardPurchase(json(command, JSONObject(purchase.toString()))))
+                val cardFields = ledger.snapshot(date.take(7))["transactions"] as List<Map<String, Any?>>
+                val cardPurchase = cardFields.single { it["id"] == cardTransactionId }
+                assertEquals(listOf(placeTagId), cardPurchase["tagIds"])
+                assertEquals(null, cardPurchase["categoryId"])
+                assertEquals(2, ledger.rows("finance_metadata_audit").size)
+                val canonicalRequest = JSONObject(ledger.rows("finance_extended_transactions").single { it["id"] == cardTransactionId }["request_json"] as String)
+                assertEquals(0, canonicalRequest.getJSONArray("tagIds").length())
+            }
+        }
+    }
 }

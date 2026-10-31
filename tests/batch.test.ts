@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { batchBlockReason, hasPossibleBatchMatches, type BatchCandidate } from '../src/capture/batch';
+import { batchBlockReason, batchClassification, hasPossibleBatchMatches, type BatchCandidate } from '../src/capture/batch';
 import type { NotificationCandidateFields } from '../src/capture/native';
 
 const today = '2026-10-31';
@@ -54,4 +54,14 @@ test('possible matches require individual review without claiming equal purchase
   assert.match(batchBlockReason(value, today) ?? '', /não provam duplicidade/i);
   assert.match(batchBlockReason(candidate({ transactionId: 'existing-1' }), today) ?? '', /vinculado/i);
   assert.match(batchBlockReason(candidate({ hasLaterRevision: true }), today) ?? '', /versão|revisão/i);
+});
+
+
+test('batch keeps each place classification unless a shared edit is explicitly chosen', () => {
+  const row = candidate({ parsed: { confidence: confidence(), draft: fields({ categoryId: 'food', category: 'Comida', tagIds: ['place'] }) } });
+  const selected = batchClassification(row);
+  assert.deepEqual(selected, { categoryId: 'food', category: 'Comida', tagIds: ['place'] });
+  selected.tagIds.push('local-only');
+  assert.deepEqual(batchClassification(row).tagIds, ['place']);
+  assert.deepEqual(batchClassification(row, { categoryId: null, category: 'A classificar', tagIds: [] }), { categoryId: null, category: 'A classificar', tagIds: [] });
 });

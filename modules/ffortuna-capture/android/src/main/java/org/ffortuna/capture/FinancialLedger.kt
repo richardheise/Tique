@@ -169,7 +169,8 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             if(it.moveToFirst()) it.getString(0) to it.getString(1) else null
         }
         // Existing archived selections may be kept; new ones require active catalog options.
-        val previous=existing?.second?.let { jsonMap(JSONObject(it)) }
+        val originalExisting=existing?.let { MetadataRules.replayOriginalRequest(db,"finance",it.first,it.second) }
+        val previous=originalExisting?.let { jsonMap(it) }
         val normalized=JSONObject(ClassificationReview.prepare(root.toString(),catalog(),previous))
         val category=FinanceRules.text(string(normalized,"category"),80)
         val categoryId=if(normalized.isNull("categoryId")) null else normalized.getString("categoryId")
@@ -178,7 +179,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         val request=JSONObject(linkedMapOf("amountCents" to amount,"kind" to kind,"effectiveDate" to date,"description" to description,
             "category" to (if(categoryId==null) category else ""),"categoryId" to categoryId,"tagIds" to ids)).toString()
         if(existing!=null) {
-            if(JSONObject(existing.second).toString()!=JSONObject(request).toString()) throw FinanceFailure("CONFIRMATION_CONFLICT")
+            if(originalExisting.toString()!=JSONObject(request).toString()) throw FinanceFailure("CONFIRMATION_CONFLICT")
             return existing.first
         }
         if(source?.get("packageName")=="org.tique.statement" && statementMatches(source["sourceKey"] as String).isNotEmpty()) throw FinanceFailure("IMPORT_CONFLICT")
@@ -189,6 +190,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         db.execSQL("INSERT INTO finance_transactions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",arrayOf<Any?>(id,key,request,kind,amount,date,description,categoryId,category,Instant.now().toString(),if(manual) null else command,sourceJson))
         entries(id,if(kind=="income") amount else -amount,kind)
         for(tag in ids) db.execSQL("INSERT INTO finance_tags VALUES(?,?)",arrayOf(id,tag))
+        MetadataRules.applyMerchantTagAfterInsert(db,id,"finance")
         return id
     }
     fun confirmObservedBatch(items:List<ObservedBatchPost>):Map<String,Any?> {
@@ -235,7 +237,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         JSONObject(request.toString()).put("amountCents",amount).put("kind",kind).put("effectiveDate",date).put("description",description).put("category",category).put("categoryId",categoryId ?: JSONObject.NULL).put("tagIds",JSONArray(tagIds.sorted()))
     private fun replayExtended(command:String,expected:JSONObject):String? {
         val prior=db.rawQuery("SELECT id,request_json FROM finance_extended_transactions WHERE command_key=?",arrayOf("manual:$command")).use { if(it.moveToFirst()) it.getString(0) to JSONObject(it.getString(1)) else null } ?: return null
-        val old=prior.second;val keys=expected.keys().asSequence().toSet()-"commandId"
+        val old=MetadataRules.replayOriginalRequest(db,"extended",prior.first,prior.second.toString());val keys=expected.keys().asSequence().toSet()-"commandId"
         if((old.keys().asSequence().toSet()-"commandId")!=keys||keys.any { old.get(it).toString()!=expected.get(it).toString() }) throw FinanceFailure("CONFIRMATION_CONFLICT")
         return prior.first
     }
@@ -248,7 +250,7 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         val key="manual:$command"
         val prior=db.rawQuery("SELECT id,request_json FROM finance_extended_transactions WHERE command_key=?",arrayOf(key)).use { if(it.moveToFirst()) it.getString(0) to it.getString(1) else null }
         val normalizedRequest=normalizedExtendedRequest(request,amount,kind,date,description,categoryId,category,tagIds)
-        if(prior!=null) { if(JSONObject(prior.second).toString()!=normalizedRequest.toString()) throw FinanceFailure("CONFIRMATION_CONFLICT");return prior.first }
+        if(prior!=null) { if(MetadataRules.replayOriginalRequest(db,"extended",prior.first,prior.second).toString()!=normalizedRequest.toString()) throw FinanceFailure("CONFIRMATION_CONFLICT");return prior.first }
         if(legs.values.fold(java.math.BigInteger.ZERO) { sum,value -> sum+java.math.BigInteger.valueOf(value) }!=java.math.BigInteger.ZERO) throw FinanceFailure("UNBALANCED_ENTRIES")
         val id=UUID.randomUUID().toString()
         db.execSQL("INSERT INTO finance_extended_transactions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",arrayOf<Any?>(id,key,normalizedRequest.toString(),kind,amount,date,description,categoryId,category,resourceId,resourceName,commitmentId,invoiceMonth,direction,Instant.now().toString(),null,null))
@@ -331,7 +333,9 @@ class FinancialLedger(private val db:SQLiteDatabase) {
         val commitmentId=if(commitmentRow!=null) commitmentRow["id"] as String else UUID.randomUUID().toString()
         if(commitmentRow==null) db.execSQL("INSERT INTO finance_commitments VALUES(?,?,?,?,?,?,?)",arrayOf(commitmentId,"invoice:$cardId:$month",cardId,"Fatura ${card["name"]} $month",due,month,amount))
         else db.execSQL("UPDATE finance_commitments SET amount=? WHERE id=?",arrayOf(FinanceRules.sum(listOf(commitmentRow["amount"] as Long,amount)),commitmentId))
-        recordExtended(command,"card_purchase",amount,date,description,categoryId,category,cardId,card["name"] as String,commitmentId,month,null,req,mapOf("expense" to amount,"liability:$commitmentId" to -amount),tagIds)
+        val transactionId=recordExtended(command,"card_purchase",amount,date,description,categoryId,category,cardId,card["name"] as String,commitmentId,month,null,req,mapOf("expense" to amount,"liability:$commitmentId" to -amount),tagIds)
+        MetadataRules.applyMerchantTagAfterInsert(db,transactionId,"extended")
+        transactionId
     }
     fun payCommitment(json:String):String=atomic {
         ensureTracking();val value=resourceRoot(json,setOf("commitmentId","amountCents","date"));val commitmentId=string(value,"commitmentId");val commitment=rows("finance_commitments").firstOrNull { it["id"]==commitmentId } ?: throw FinanceFailure("NOT_FOUND");val amount=FinanceRules.cents(value.get("amountCents"));val date=string(value,"date");currentDate(date)
@@ -517,9 +521,12 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             if(!opening) {
                 val request=JSONObject(row["request_json"] as String);ClassificationReview.validate(request)
                 if(request.keys().asSequence().toSet()!=setOf("amountCents","kind","effectiveDate","description","category","categoryId","tagIds")) throw FinanceFailure("INVALID_STATE")
-                if(FinanceRules.cents(request.get("amountCents"))!=amount || request.getString("kind")!=row["kind"] || request.getString("effectiveDate")!=date || request.getString("description")!=row["description"] || (if(request.isNull("categoryId")) null else request.getString("categoryId"))!=category) throw FinanceFailure("INVALID_STATE")
-                val selected=groupedTags[row["id"]].orEmpty().map { it["tag_id"] }.toSet()
-                val selectedJson=request.getJSONArray("tagIds");if(selected!=(0 until selectedJson.length()).map { selectedJson.getString(it) }.toSet()) throw FinanceFailure("INVALID_STATE")
+                if(FinanceRules.cents(request.get("amountCents"))!=amount || request.getString("kind")!=row["kind"] || request.getString("effectiveDate")!=date || request.getString("description")!=row["description"]) throw FinanceFailure("INVALID_STATE")
+                val selected=groupedTags[row["id"]].orEmpty().map { it["tag_id"] as? String ?: throw FinanceFailure("INVALID_STATE") }.toSet()
+                val selectedJson=request.getJSONArray("tagIds");val requestTags=(0 until selectedJson.length()).map { selectedJson.getString(it) }.toSet()
+                if(!MetadataRules.validateMetadataHistory(db,"finance",row["id"] as String,
+                    if(request.isNull("categoryId")) null else request.getString("categoryId"),request.getString("category"),requestTags,
+                    category as String?,row["category_legacy"] as String,selected)) throw FinanceFailure("INVALID_STATE")
                 if(row["source_event_id"]==null) {
                     val key=row["command_key"] as String
                     if(!key.startsWith("manual:") || UUID.fromString(key.removePrefix("manual:")).toString()!=key.removePrefix("manual:") || row["source_json"]!=null) throw FinanceFailure("INVALID_STATE")
@@ -589,8 +596,11 @@ class FinancialLedger(private val db:SQLiteDatabase) {
             if(!requestKeys.containsAll(required)||request.getString("kind")!=kind||FinanceRules.cents(request.get("amountCents"))!=amount||request.getString("effectiveDate")!=date||request.getString("description")!=description) throw FinanceFailure("INVALID_STATE")
             val legs=extEntryGroups[id].orEmpty();if(legs.size<2||FinanceRules.sum(legs.map { it["cents"] as Long })!=0L) throw FinanceFailure("UNBALANCED_ENTRIES")
             val cat=row["category_id"];if(cat!=null&&options[cat]?.get("kind")!="category") throw FinanceFailure("INVALID_STATE")
-            val tagsFor=extTagGroups[id].orEmpty().map { it["tag_id"] }.toSet();if(extTagGroups[id].orEmpty().size>20||tagsFor.any { options[it]?.get("kind")!="tag" }) throw FinanceFailure("INVALID_STATE")
-            val requestTags=request.optJSONArray("tagIds")?.let { a->(0 until a.length()).map { a.getString(it) }.toSet() } ?: throw FinanceFailure("INVALID_STATE");if(requestTags!=tagsFor) throw FinanceFailure("INVALID_STATE")
+            val tagsFor=extTagGroups[id].orEmpty().map { it["tag_id"] as? String ?: throw FinanceFailure("INVALID_STATE") }.toSet();if(extTagGroups[id].orEmpty().size>20||tagsFor.any { options[it]?.get("kind")!="tag" }) throw FinanceFailure("INVALID_STATE")
+            val requestTags=request.optJSONArray("tagIds")?.let { a->(0 until a.length()).map { a.getString(it) }.toSet() } ?: throw FinanceFailure("INVALID_STATE")
+            if(!MetadataRules.validateMetadataHistory(db,"extended",id,
+                if(request.isNull("categoryId")) null else request.getString("categoryId"),request.getString("category"),requestTags,
+                cat as String?,row["category_legacy"] as String,tagsFor)) throw FinanceFailure("INVALID_STATE")
             when(kind) {
                 "reserve_opening" -> { val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date!=reserve["created_on"]||(if(id in extVoided) reserve["opening_cents"]!=0L else reserve["opening_cents"]!=amount)||legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=amount||legs.singleOrNull { it["resource"]=="equity" }?.get("cents")!=-amount) throw FinanceFailure("INVALID_STATE") }
                 "reserve_move" -> { val direction=row["direction"];val reserve=reserves.firstOrNull { it["id"]==row["resource_id"] };if(reserve==null||date<(reserve["created_on"] as String)||direction !in setOf("deposit","withdraw")) throw FinanceFailure("INVALID_STATE");val signed=if(direction=="deposit") amount else -amount;if(legs.singleOrNull { it["resource"]=="reserve:${row["resource_id"]}" }?.get("cents")!=signed||legs.singleOrNull { it["resource"]=="cash" }?.get("cents")!=-signed) throw FinanceFailure("INVALID_STATE") }

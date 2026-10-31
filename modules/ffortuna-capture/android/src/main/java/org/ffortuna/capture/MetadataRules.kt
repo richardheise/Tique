@@ -132,6 +132,9 @@ object MetadataRules {
         if (duplicate) throw FinanceFailure("RULE_DUPLICATE")
         val selectedEnabled = enabled ?: (previous?.get("enabled") as? Boolean ?: true)
         val merchantTagId = if (matchMode == "merchant") ensureMerchantTag(db, description) else null
+        val usedByAudit = previous != null && db.rawQuery("SELECT id FROM finance_metadata_audit WHERE rule_id=? LIMIT 1", arrayOf(id)).use { it.moveToFirst() }
+        if (usedByAudit && previous?.get("merchantTagId") != null &&
+            (matchMode != "merchant" || previous["merchantTagId"] != merchantTagId)) throw FinanceFailure("RULE_IN_USE")
         if (previous == null) {
             db.execSQL("INSERT INTO finance_metadata_rules(id,description,match_key,category_id,category_legacy,tag_ids_json,enabled,created_at,updated_at,match_mode,aliases_json,merchant_tag_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 arrayOf(id, description, key, categoryId, category, JSONArray(tagIds).toString(), if (selectedEnabled) 1 else 0, now, now, matchMode, JSONArray(aliases).toString(), merchantTagId))
@@ -232,6 +235,92 @@ object MetadataRules {
         return rows
     }
 
+    /** Add only the known place tag after posting; the canonical request and ledger entries stay unchanged. */
+    fun applyMerchantTagAfterInsert(db: SQLiteDatabase, transactionId: String, scope: String): Boolean {
+        uuid(transactionId)
+        if (scope !in setOf("finance", "extended")) throw FinanceFailure("INVALID_FIELDS")
+        val table = if (scope == "finance") "finance_transactions" else "finance_extended_transactions"
+        val tagTable = if (scope == "finance") "finance_tags" else "finance_extended_tags"
+        val kind: String
+        val description: String
+        val categoryId: String?
+        val category: String
+        db.rawQuery("SELECT kind,description,category_id,category_legacy FROM $table WHERE id=?", arrayOf(transactionId)).use { cursor ->
+            if (!cursor.moveToFirst()) throw FinanceFailure("NOT_FOUND")
+            kind = cursor.getString(0)
+            if ((scope == "finance" && kind !in setOf("income", "expense")) || (scope == "extended" && kind != "card_purchase")) return false
+            description = cursor.getString(1)
+            categoryId = cursor.getString(2).takeUnless { cursor.isNull(2) }
+            category = cursor.getString(3)
+        }
+        val placeRules = matchingRules(db, matchKey(description)).filter { it["matchMode"] == "merchant" }
+        val rule = placeRules.singleOrNull() ?: return false
+        val tagId = rule["merchantTagId"] as? String ?: return false
+        val tagIsActive = db.rawQuery("SELECT archived,kind FROM classifications WHERE id=?", arrayOf(tagId)).use {
+            it.moveToFirst() && it.getString(1) == "tag" && it.getInt(0) == 0
+        }
+        if (!tagIsActive) return false
+        val oldTags = db.rawQuery("SELECT tag_id FROM $tagTable WHERE transaction_id=? ORDER BY tag_id", arrayOf(transactionId)).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        if (tagId in oldTags) return false
+        if (oldTags.size >= 20) throw FinanceFailure("INVALID_CLASSIFICATION")
+        val nextTags = (oldTags + tagId).distinct().sorted()
+        db.execSQL("INSERT INTO $tagTable(transaction_id,tag_id) VALUES(?,?)", arrayOf(transactionId, tagId))
+        db.execSQL("INSERT INTO finance_metadata_audit VALUES(?,?,?,?,?,?,?,?,?,?,?)", arrayOf(
+            UUID.randomUUID().toString(), scope, transactionId, rule["id"], categoryId, category, JSONArray(oldTags.sorted()).toString(),
+            categoryId, category, JSONArray(nextTags).toString(), Instant.now().toString()
+        ))
+        return true
+    }
+
+    fun replayOriginalRequest(db: SQLiteDatabase, scope: String, transactionId: String, requestJson: String): JSONObject {
+        val chain = auditChain(db, scope, transactionId)
+        if (chain.isEmpty()) return JSONObject(requestJson)
+        val original = chain.first().previous
+        return JSONObject(requestJson)
+            .put("categoryId", original.categoryId ?: JSONObject.NULL)
+            .put("category", if (scope == "finance" && original.categoryId != null) "" else original.category)
+            .put("tagIds", JSONArray(original.tagIds))
+    }
+
+    fun validateMetadataHistory(
+        db: SQLiteDatabase, scope: String, transactionId: String,
+        requestCategoryId: String?, requestCategory: String, requestTagIds: Set<String>,
+        currentCategoryId: String?, currentCategory: String, currentTagIds: Set<String>
+    ): Boolean {
+        val requestTags = requestTagIds.sorted()
+        fun matchesRequest(state: AuditState): Boolean =
+            requestCategoryId == state.categoryId && requestTags == state.tagIds.sorted() &&
+                (requestCategory == state.category || (scope == "finance" && state.categoryId != null && requestCategory.isEmpty()))
+        val chain = auditChain(db, scope, transactionId)
+        if (chain.isEmpty()) return matchesRequest(AuditState(currentCategoryId, currentCategory, currentTagIds.toList()))
+        for (index in 1 until chain.size) {
+            if (chain[index - 1].next != chain[index].previous) return false
+        }
+        val initial = chain.first().previous
+        val latest = chain.last().next
+        if (latest.categoryId != currentCategoryId || latest.category != currentCategory || latest.tagIds.toSet() != currentTagIds) return false
+        // The original 1.0 reclassifier rewrote request_json. Accept its latest audit state
+        // as a legacy base while new rows keep the original request unchanged.
+        return chain.any { matchesRequest(it.previous) || matchesRequest(it.next) } || matchesRequest(initial) || matchesRequest(latest)
+    }
+
+    private data class AuditState(val categoryId: String?, val category: String, val tagIds: List<String>)
+    private data class AuditStep(val previous: AuditState, val next: AuditState)
+
+    private fun auditChain(db: SQLiteDatabase, scope: String, transactionId: String): List<AuditStep> = db.rawQuery(
+        "SELECT previous_category_id,previous_category,previous_tag_ids_json,next_category_id,next_category,next_tag_ids_json FROM finance_metadata_audit WHERE transaction_scope=? AND transaction_id=? ORDER BY rowid",
+        arrayOf(scope, transactionId)
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) add(AuditStep(
+                AuditState(cursor.getString(0).takeUnless { cursor.isNull(0) }, cursor.getString(1), parseTagsJson(cursor.getString(2)).sorted()),
+                AuditState(cursor.getString(3).takeUnless { cursor.isNull(3) }, cursor.getString(4), parseTagsJson(cursor.getString(5)).sorted())
+            ))
+        }
+    }
+
     /** Caller must be inside FinancialLedger.atomic; writes only category/tags and an audit row. */
     fun reclassify(db: SQLiteDatabase, changes: List<Change>, ruleId: String? = null): Int {
         if (changes.isEmpty() || changes.size > 1000 || changes.map { it.transactionId }.distinct().size != changes.size) throw FinanceFailure("INVALID_FIELDS")
@@ -246,12 +335,11 @@ object MetadataRules {
             val oldCategoryId: String?
             val oldCategory: String
             val oldTags: List<String>
-            val request: JSONObject
             val kind: String
             val table = if (change.scope == "finance") "finance_transactions" else "finance_extended_transactions"
             val tagTable = if (change.scope == "finance") "finance_tags" else "finance_extended_tags"
             val cancellationTable = if (change.scope == "finance") "finance_cancellations" else "finance_extended_cancellations"
-            db.rawQuery("SELECT kind,description,category_id,category_legacy,request_json FROM $table WHERE id=?", arrayOf(change.transactionId)).use { cursor ->
+            db.rawQuery("SELECT kind,description,category_id,category_legacy FROM $table WHERE id=?", arrayOf(change.transactionId)).use { cursor ->
                 if (!cursor.moveToFirst()) throw FinanceFailure("NOT_FOUND")
                 kind = cursor.getString(0)
                 val allowedKinds = if (change.scope == "finance") setOf("income", "expense") else setOf("card_purchase")
@@ -259,7 +347,6 @@ object MetadataRules {
                 description = cursor.getString(1)
                 oldCategoryId = cursor.getString(2).takeUnless { cursor.isNull(2) }
                 oldCategory = cursor.getString(3)
-                request = try { JSONObject(cursor.getString(4)) } catch (_: Exception) { throw FinanceFailure("INVALID_STATE") }
             }
             val voided = db.rawQuery("SELECT transaction_id FROM $cancellationTable WHERE transaction_id=?", arrayOf(change.transactionId)).use { it.moveToFirst() }
             if (voided) throw FinanceFailure("TRANSACTION_VOIDED")
@@ -288,12 +375,8 @@ object MetadataRules {
             }
             if (change.categoryId == oldCategoryId && category == oldCategory && tags == oldTags.sorted()) continue
 
-            val nextRequest = JSONObject(request.toString())
-                .put("category", category)
-                .put("categoryId", change.categoryId ?: JSONObject.NULL)
-                .put("tagIds", JSONArray(tags))
-            db.execSQL("UPDATE $table SET category_id=?,category_legacy=?,request_json=? WHERE id=?",
-                arrayOf(change.categoryId, category, nextRequest.toString(), change.transactionId))
+            db.execSQL("UPDATE $table SET category_id=?,category_legacy=? WHERE id=?",
+                arrayOf(change.categoryId, category, change.transactionId))
             db.execSQL("DELETE FROM $tagTable WHERE transaction_id=?", arrayOf(change.transactionId))
             for (tag in tags) db.execSQL("INSERT INTO $tagTable(transaction_id,tag_id) VALUES(?,?)", arrayOf(change.transactionId, tag))
             db.execSQL("INSERT INTO finance_metadata_audit VALUES(?,?,?,?,?,?,?,?,?,?,?)", arrayOf(

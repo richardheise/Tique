@@ -119,7 +119,7 @@ const errorMessages: Record<string, string> = {
 function failure(code?: string) {
   if (!code) return 'Operação não concluída.';
   const message = errorMessages[code] ?? 'Operação não concluída.';
-  return ['INSUFFICIENT_FUNDS', 'CANCELLATION_CONFLICT', 'CANCELLATION_DEPENDENCY', 'ALREADY_CANCELLED'].includes(code) ? message : `${message} (${code})`;
+  return message;
 }
 
 export function FinancePanel({ native, busy, run, view, onNavigate, onTools, entryKind, entryRequest, valuesHidden, onToggleValues, epoch, onChanged, selectedMonth, onSelectedMonthChange, uncategorizedOnly = false, onBookChanged, initialRule, onCreateRule }: Props) {

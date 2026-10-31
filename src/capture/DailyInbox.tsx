@@ -6,7 +6,7 @@ import { formatBRL } from '../core/money';
 import { Action, Card, ErrorBox, ScreenScroll, colors, styles } from '../ui/common';
 import { CandidatePanel } from './CandidatePanel';
 import { ClassificationPanel } from './ClassificationPanel';
-import { batchBlockReason, batchFields, hasPossibleBatchMatches } from './batch';
+import { batchBlockReason, batchFields, batchClassification, hasPossibleBatchMatches } from './batch';
 import type { CaptureModule, DiagnosticResult, DiagnosticSampleInfo, NotificationCandidate } from './native';
 
 type Props = {
@@ -52,6 +52,7 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
   const [batchMode, setBatchMode] = useState(false);
   const [classification, setClassification] = useState<BatchClassification>({ categoryId: null, category: 'A classificar', tagIds: [] });
   const [batchSaving, setBatchSaving] = useState(false);
+  const [uniformClassification, setUniformClassification] = useState(false);
   const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -120,7 +121,7 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
     setCheckingId(null);
     setBatchKind(null);
     setBatchMode(false);
-    setClassification({ categoryId: null, category: 'A classificar', tagIds: [] });
+    setClassification({ categoryId: null, category: 'A classificar', tagIds: [] }); setUniformClassification(false);
     setBatchMessage(null);
     setBatchSaving(false);
     setError(null);
@@ -129,6 +130,7 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
 
   const closeReview = useCallback(() => {
     setSelectedId(null);
+    setSelectedBatch([]); setBatchCandidates({});
     changedRef.current();
   }, []);
 
@@ -206,7 +208,7 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
     const request = ++batchGeneration.current;
     const ids = [...selectedBatch];
     const currentClassification = { ...classification, tagIds: [...classification.tagIds] };
-    const items = ids.map(id => ({ id, kind: batchKind, ...currentClassification }));
+    const items = ids.map(id => ({ id, kind: batchKind, ...batchClassification(batchCandidates[id]!, uniformClassification ? currentClassification : undefined) }));
     Alert.alert(
       'Confirmar movimentos selecionados?',
       `${ids.length} movimento(s) serão registrados como ${batchKind === 'income' ? 'receita' : 'despesa'} e entrarão nas análises. O sinal do arquivo não diz se é receita ou despesa. Transferências, faturas, investimentos, estornos e reembolsos exigem revisão individual.`,
@@ -232,7 +234,7 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
               setBatchCandidates({});
               setBlockedBatch({});
               setBatchKind(null);
-              setClassification({ categoryId: null, category: 'A classificar', tagIds: [] });
+              setClassification({ categoryId: null, category: 'A classificar', tagIds: [] }); setUniformClassification(false);
               setBatchMessage(`${result.registered ?? ids.length} movimento(s) registrado(s).`);
               setBatchMode(false);
               batchConfirmedRef.current?.(result.months ?? []);
@@ -274,7 +276,8 @@ export function DailyInbox({ native, busy, run, epoch, onChanged, onBatchConfirm
               <Action title={batchKind === 'income' ? '✓ Receita' : 'Receita'} secondary disabled={busy || batchSaving} onPress={() => setBatchKind(batchKind === 'income' ? null : 'income')} />
               <Action title={batchKind === 'expense' ? '✓ Despesa' : 'Despesa'} secondary disabled={busy || batchSaving} onPress={() => setBatchKind(batchKind === 'expense' ? null : 'expense')} />
             </View>
-            <ClassificationPanel native={native} busy={busy || batchSaving} run={run} selection={classification} onChange={setClassification} />
+            <Action secondary title={uniformClassification ? '✓ Mesma categoria e tags' : 'Usar a mesma categoria e tags'} disabled={busy || batchSaving} onPress={() => setUniformClassification(value => !value)} />
+            {uniformClassification ? <ClassificationPanel native={native} busy={busy || batchSaving} run={run} selection={classification} onChange={setClassification} /> : <Text style={styles.small}>Cada movimento mantém sua categoria e suas tags.</Text>}
             <Text style={styles.small}>{selectedBatch.length} de {pendingCount} revisões selecionadas.</Text>
             <ErrorBox message={batchMessage} />
             <Action title={batchSaving ? 'Registrando…' : 'Confirmar selecionados'} disabled={busy || batchSaving || !batchKind} onPress={confirmBatch} />

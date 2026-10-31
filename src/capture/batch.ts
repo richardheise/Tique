@@ -33,3 +33,8 @@ export function batchBlockReason(candidate: BatchCandidate, today: string): stri
 export function hasPossibleBatchMatches(candidate: BatchCandidate): boolean {
   return (candidate.possibleMatches?.length ?? 0) > 0;
 }
+
+export function batchClassification(candidate: BatchCandidate, override?: { categoryId: string | null; category: string; tagIds: string[] }) {
+  const fields = override ?? batchFields(candidate);
+  return { categoryId: fields.categoryId ?? null, category: fields.category || 'A classificar', tagIds: [...(fields.tagIds ?? [])] };
+}
